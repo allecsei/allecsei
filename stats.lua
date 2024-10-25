@@ -41,18 +41,41 @@ end)
 sampRegisterChatCommand('kp', function()
     sampSendChat('/killcp')
 end)
+sampRegisterChatCommand('cf', function()
+    sampSendChat('/cancel find')
+end)
+sampRegisterChatCommand('shit', function()
+    sampSendChat('/portable')
+        sampSendChat('order 1')
+            sampSendChat('order 1')
+              sampSendChat('gethit')
+                sampSendChat('undercover')
+end)
+sampRegisterChatCommand('levhit', function()
+    sampSendChat('leavehit')
+        sampSendChat('gethit')
+            sampSendChat('undercover')
+end)
+
 ------------------- Dialog ---------------------
 sampRegisterChatCommand('cmd', function()
-    local titleMessage = "{FF4500}Commands List - Admbot by Allecsei"
+    local titleMessage = "{FF4500}Comenzi List - AdmBot by Allecsei"
     local command1 = "{00FF00}/st {FFFFFF}- stats"
-    local command2 = "{00FF00}/in {FFFFFF}- buy insurance"
-    local command3 = "{00FF00}/sal {FFFFFF}- salut global"
-    local command4 = "{00FF00}/kp {FFFFFF}- kill checkpoint"
+    local command2 = "{00FF00}/in {FFFFFF}- buyinsurance for car!"
+    local command3 = "{00FF00}/sal {FFFFFF}- Saluti pe toate chaturile!"
+    local command4 = "{00FF00}/kp {FFFFFF}- Anulezi checkpoint activ!"
+    local command5 = "{00FF00}/cf {FFFFFF}- Cancel find!"
+    local command6 = "{00FF00}/shit {FFFFFF}- Porneste un contract automat + comenzile necesare!"
+    local command7 = "{00FF00}/levhit {FFFFFF}- Pornesti un contract nou = /find[id]!"     
 
     sampAddChatMessage(titleMessage, -1)
     sampAddChatMessage(command1, -1)
     sampAddChatMessage(command2, -1)
     sampAddChatMessage(command3, -1)
     sampAddChatMessage(command4, -1)
+    sampAddChatMessage(command5, -1)
+    sampAddChatMessage(command6, -1)
+    sampAddChatMessage(command7, -1)
+        
 end)
 
