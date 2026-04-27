@@ -1,6 +1,6 @@
 script_name('Dialog Check')
 script_author('allecsei')
-script_version('v1.2')
+script_version('v1.4')
 
 require 'lib.moonloader'
 local keys = require 'vkeys'
@@ -9,8 +9,22 @@ local inicfg = require 'inicfg'
 
 local dialogs = {}
 local dialogCount = 0
-local savePath = 'DialogCheck\\DialogCheck.ini'
-local dialogCheckEnabled = true
+local configPath = 'DialogCheck\\Config.ini' -- Fișier separat pentru setări
+local savePath = 'DialogCheck\\DialogCheck.ini' -- Fișier pentru log-ul dialogurilor
+
+-- Structura default pentru setări
+local mainIni = inicfg.load({
+    settings = {
+        enabled = true
+    }
+}, configPath)
+
+-- Verificăm dacă fișierul există, dacă nu, îl creăm
+if not doesFileExist('moonloader\\config\\' .. configPath) then
+    inicfg.save(mainIni, configPath)
+end
+
+local dialogCheckEnabled = mainIni.settings.enabled
 
 function dialog_id()
     sampAddChatMessage(string.format('{FFFFFF}Dialog Check is %s. Cached dialogs: %d', dialogCheckEnabled and '{00FF00}enabled' or '{FF0000}disabled', dialogCount), 0xFFFFFF)
@@ -22,7 +36,9 @@ function enable_dialogcheck()
         return
     end
     dialogCheckEnabled = true
-    sampAddChatMessage('{00FF00}DialogCheck enabled.', 0xFFFFFF)
+    mainIni.settings.enabled = true
+    inicfg.save(mainIni, configPath) -- Salvăm starea în INI
+    sampAddChatMessage('{00FF00}DialogCheck enabled and saved.', 0xFFFFFF)
 end
 
 function disable_dialogcheck()
@@ -31,7 +47,9 @@ function disable_dialogcheck()
         return
     end
     dialogCheckEnabled = false
-    sampAddChatMessage('{FF0000}DialogCheck disabled.', 0xFFFFFF)
+    mainIni.settings.enabled = false
+    inicfg.save(mainIni, configPath) -- Salvăm starea în INI
+    sampAddChatMessage('{FF0000}DialogCheck disabled and saved.', 0xFFFFFF)
 end
 
 function save_dialogs()
@@ -63,7 +81,11 @@ end
 function main()
     if not isSampLoaded or not isSampfuncsLoaded() then return end
     while not isSampAvailable() do wait(100) end
-    sampAddChatMessage('{AA3322}Dialog Check script loaded. Use {FFFFFF}/checkdialog{AA3322}, {FFFFFF}/enable{AA3322} and {FFFFFF}/disable{AA3322}. Use {FFFFFF}/savedialogs {AA3322}to save them to an INI file.', 0xFFFFFF)        
+    
+    -- Notificare stare la încărcare
+    local statusText = dialogCheckEnabled and '{00FF00}ENABLED' or '{FF0000}DISABLED'
+    sampAddChatMessage('{AA3322}Dialog Check script loaded. Use {FFFFFF}/checkdialog{AA3322}, {FFFFFF}/enable{AA3322} and {FFFFFF}/disable{AA3322}. Use {FFFFFF}/savedialogs {AA3322}to save them to an INI file.', 0xFFFFFF)
+    
     sampRegisterChatCommand('checkdialog', dialog_id)
     sampRegisterChatCommand('savedialogs', save_dialogs)
     sampRegisterChatCommand('enable', enable_dialogcheck)
