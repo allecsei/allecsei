@@ -105,7 +105,7 @@ for _, v in ipairs(cmds_hitmen) do
     local iniValue = main_ini.shortcuts[key]
     -- Asigura ca valoarea din INI este intotdeauna boolean
     if type(iniValue) ~= "boolean" then
-        iniValue = true -- Default la true daca valoarea nu e boolean sau nu exista
+        iniValue = true  
         main_ini.shortcuts[key] = true
         needs_initial_save = true
     end
@@ -132,9 +132,10 @@ local selected_theme = imgui.ImInt(main_ini.appearance.theme)
 local menu_opacity = imgui.ImFloat(main_ini.appearance.opacity)
 local cWindowStyle = imgui.ImInt(main_ini.appearance.style or 0)
 local sniper_dist_val = imgui.ImInt(main_ini.protection.min_dist)
+local shortcuts_window_initialized = false
 
 ------------------------- Local Colors -------------------------
- local hitmenColor = 4284357388
+local hitmenColor = 4284357388
 local colorGreen  = 4278255360
 local colorRed    = 4294901760
 local colorWhite  = -1
@@ -633,12 +634,12 @@ function toggleTSOMain()
 end
 
 function ghremind()
-    shortcut_states["ghremind"].v = not shortcut_states["ghremind"].v
-    main_ini.shortcuts.ghremind = shortcut_states["ghremind"].v
+    hitcooldown_state.v = not hitcooldown_state.v
+    main_ini.features.hitcooldown = hitcooldown_state.v
     inicfg.save(main_ini, direct_ini)
-    local status = shortcut_states["ghremind"].v and "{00FF00}ON{ffffff}." or "{FF0000}OFF{ffffff}."
+    local status = hitcooldown_state.v and "{00FF00}ON{ffffff}." or "{FF0000}OFF{ffffff}."
     if english_state.v then
-        sampAddChatMessage("[Hitmen Helper]{FFFFFF} Gethit Reminder has been turned " .. status, -1)
+        sampAddChatMessage("{5e150c}[Hitmen Helper]{FFFFFF} Gethit Reminder has been turned " .. status, -1)
     else
         sampAddChatMessage("{5e150c}[Hitmen Helper]{FFFFFF} Gethit Reminder a fost " .. status, -1)
     end
@@ -674,6 +675,29 @@ function makeScreenshot(clean)
     end)
 end
 
+function sampev.onSendGiveDamage(playerId, damage, weapon, bodypart)
+    if pID ~= -1 and playerId == pID then
+        if weapon == 34 or getCurrentCharWeapon(playerPed) == 34 then
+            local result, charHandle = sampGetCharHandleBySampPlayerId(playerId)
+            if result then
+                local myX, myY, myZ = getCharCoordinates(playerPed)
+                local tarX, tarY, tarZ = getCharCoordinates(charHandle)
+                local distance = getDistanceBetweenCoords3d(myX, myY, myZ, tarX, tarY, tarZ)
+
+                if distance < main_ini.protection.min_dist then
+                    local warnMsg = english_state.v and "Target too close! Min dist: %dm" or "Tinta prea aproape! Dist. minima: %dm"
+                    printStringNow(string.format(warnMsg, main_ini.protection.min_dist), 2000)
+                    return false 
+                end
+            end
+        end
+    end
+end
+
+function cleanColors(text)
+    return text:gsub('{......}', '')
+end
+
 ----------------------- MAIN -----------------------
 function onWindowMessage(msg, wparam, lparam)
     if msg == 0x0100 or msg == 0x0101 then
@@ -693,23 +717,34 @@ function main()
     while not isSampAvailable() do wait(100) end
 
     local loadedMsg = english_state.v and "Script loaded! Use %s/meniu%s or key %sF2%s." or "Script incarcat! Foloseste %s/meniu%s sau tasta %sF2%s."
+    local authorMsg = string.format("{5e150c}[Hitmen Helper]{FFFFFF} Author: {5e150c}allecsei {FFFFFF}| Version: {5e150c}%s {FFFFFF}| Discord: {5e150c}allecsei", thisScript().version)
+
     sampAddChatMessage("{5e150c}[Hitmen Helper]{FFFFFF} " .. string.format(loadedMsg, "{5e150c}", "{FFFFFF}", "{5e150c}", "{FFFFFF}"), -1)
+    sampAddChatMessage(authorMsg, -1)
 
     sampRegisterChatCommand("meniu", function()
         main_window_state.v = not main_window_state.v
     end)
 
     sampRegisterChatCommand("track", function(arg)
-        local id = tonumber(arg)
-        if not id or not sampIsPlayerConnected(id) then
-            local usageMsg = english_state.v and "Usage: /track [ID]" or "Utilizare: /track [ID]"
-            sampAddChatMessage("{5e150c}[Hitmen Helper]{FFFFFF} " .. usageMsg, -1)
-            pID = -1
-            return
-        end
-        pID = id
-        local trackMsg = english_state.v and "Now tracking ID: %s" or "Acum urmaresti ID: %s"
-        sampAddChatMessage("{5e150c}[Hitmen Helper]{FFFFFF} " .. string.format(trackMsg, "{5e150c}" .. pID), -1)
+    if arg == "" or arg == nil then
+        return 
+    end
+
+    local id = tonumber(arg)
+    if not id or not sampIsPlayerConnected(id) then
+        local usageMsg = english_state.v and "Usage: /track [ID]" or "Utilizare: /track [ID]"
+        sampAddChatMessage("{5e150c}[Hitmen Helper]{FFFFFF} " .. usageMsg, -1)
+        pID = -1
+        return
+    end
+
+    pID = id        
+        local name = sampGetPlayerNickname(pID)      
+        local trackMsg = english_state.v 
+            and "Now tracking ID: {aa3333}%s{FFFFFF} | name: {aa3333}%s" 
+            or "Acum urmaresti ID: {aa3333}%s{FFFFFF} | nume: {aa3333}%s"
+        sampAddChatMessage("{5e150c}[Hitmen Helper]{FFFFFF} " .. string.format(trackMsg, pID, name), -1)
     end)
 
     ------------------------ Register shortcuts commands ------------------------
@@ -919,6 +954,80 @@ function set_all_shortcuts(state)
             shortcut_states[key].v = state
             main_ini.shortcuts[key] = state
         end
+    end
+    inicfg.save(main_ini, direct_ini)
+end
+
+function drawShortcutsWindow()
+    if not shortcuts_window_initialized then
+        reloadShortcutsFromINI()
+        shortcuts_window_initialized = true
+    end
+
+    imgui.SetNextWindowSize(imgui.ImVec2(550, 850), imgui.Cond.FirstUseEver)
+    if imgui.Begin(t("Shortcuts List"), shorts_window_state, imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoResize) then
+        if imgui.Button(t("Enable All"), imgui.ImVec2(265, 25)) then
+            set_all_shortcuts(true)
+        end
+        imgui.SameLine()
+        if imgui.Button(t("Disable All"), imgui.ImVec2(265, 25)) then
+            set_all_shortcuts(false)
+        end
+
+        imgui.Separator()
+        imgui.Spacing()
+
+        imgui.BeginChild("CommandsRegion", imgui.ImVec2(0, -35), true)
+            local windowWidth = imgui.GetContentRegionAvailWidth()
+            local columnWidth = (windowWidth / 2) - 10
+
+            for i = 1, #cmds_hitmen, 2 do
+                imgui.BeginGroup()
+                    DrawCmdRow(cmds_hitmen[i], columnWidth)
+                imgui.EndGroup()
+
+                if cmds_hitmen[i+1] then
+                    imgui.SameLine(columnWidth + 20)
+                    imgui.BeginGroup()
+                        DrawCmdRow(cmds_hitmen[i+1], columnWidth)
+                    imgui.EndGroup()
+                end
+                imgui.Separator()
+            end
+        imgui.EndChild()
+
+        if imgui.Button(t("Close"), imgui.ImVec2(-1, 25)) then
+            shorts_window_state.v = false
+        end
+
+        local textStatic = "Created by "
+        local textTag = "[TLG]"
+        local textName = "allecsei"
+
+        local totalWidth = imgui.CalcTextSize(textStatic .. textTag .. textName).x
+        local windowWidth = imgui.GetWindowSize().x
+
+        imgui.SetCursorPos(imgui.ImVec2((windowWidth - totalWidth) / 2, 780))
+        imgui.TextColored(imgui.ImVec4(1.00, 1.00, 1.00, 1.00), textStatic)
+        imgui.SameLine(0, 0)
+        imgui.TextColored(imgui.ImVec4(0.05, 0.80, 0.89, 1.00), textTag)
+        imgui.SameLine(0, 0)
+        imgui.TextColored(imgui.ImVec4(0.67, 0.20, 0.20, 1.00), textName)
+
+        imgui.End()
+    end
+end
+
+----------------- shortcuts window -----------------
+function reloadShortcutsFromINI()
+    for _, v in ipairs(cmds_hitmen) do
+        local key = v.cmd:gsub("/", "_")
+        local iniValue = main_ini.shortcuts[key]
+        if type(iniValue) ~= "boolean" then
+            iniValue = true
+            main_ini.shortcuts[key] = true
+        end
+        shortcut_states[key].v = iniValue
     end
     inicfg.save(main_ini, direct_ini)
 end
@@ -1198,20 +1307,25 @@ function imgui.OnDrawFrame()
         imgui.TextColored(imgui.ImVec4(1.0, 0.2, 0.2, 1.0), t("Sniper Distance Protection"))
         imgui.Spacing()
         imgui.Separator()
-        imgui.SliderInt(t("Distance"), sniper_dist_val, 150, 1000)
-        imgui.Separator()
+        imgui.Spacing()
+
+        -- Slider pentru distanță între 150m și 1000m
+        imgui.SliderInt(t("Distance"), sniper_dist_val, 150, 300)
+
         imgui.Spacing()
         imgui.Text(t("Distanta setata: ") .. sniper_dist_val.v .. "m")
-        imgui.Spacing()
         imgui.Separator()
         imgui.Spacing()
+
+        -- Butonul de salvare
         if imgui.Button(t("Save Distance"), imgui.ImVec2(-1, 25)) then
-        imgui.Spacing()
-        imgui.Separator()
-            main_ini.protection.min_dist = sniper_dist_val.v
-            inicfg.save(main_ini, direct_ini)
-            sampAddChatMessage("{5e150c}[Hitmen Helper]{FFFFFF} " .. t("Setarile Sniper Distance au fost salvate!"), -1)
-        end
+        main_ini.protection.min_dist = sniper_dist_val.v
+        inicfg.save(main_ini, direct_ini)
+        local saveMsg = english_state.v 
+            and string.format("Sniper distance settings saved! {5e150c}(%dm){FFFFFF}!", main_ini.protection.min_dist)
+            or string.format("Setarile Sniper Distance au fost salvate! {5e150c}(%dm){FFFFFF}!", main_ini.protection.min_dist)
+        sampAddChatMessage("{5e150c}[Hitmen Helper]{FFFFFF} " .. saveMsg, -1)
+    end
 
         imgui.Spacing()
         imgui.Separator()
@@ -1242,90 +1356,19 @@ function imgui.OnDrawFrame()
 
 
 ----------------- shortcuts window -----------------
-function reloadShortcutsFromINI()
-    for _, v in ipairs(cmds_hitmen) do
-        local key = v.cmd:gsub("/", "_")
-        local iniValue = main_ini.shortcuts[key]
-        if type(iniValue) ~= "boolean" then
-            iniValue = true
-            main_ini.shortcuts[key] = true
-        end
-        shortcut_states[key].v = iniValue
-    end
-    inicfg.save(main_ini, direct_ini)
-end
-
 if shorts_window_state.v then
-    -- Reincarca setarile din INI la deschiderea ferestrei
-    reloadShortcutsFromINI()
-    imgui.SetNextWindowSize(imgui.ImVec2(550, 850), imgui.Cond.FirstUseEver)
-    if imgui.Begin(t("Shortcuts List"), shorts_window_state, imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoResize) then
-
-        -- Butoane pentru Enable/Disable All
-        if imgui.Button(t("Enable All"), imgui.ImVec2(265, 25)) then
-            set_all_shortcuts(true)
-        end
-        imgui.SameLine()
-        if imgui.Button(t("Disable All"), imgui.ImVec2(265, 25)) then
-            set_all_shortcuts(false)
-        end
-
-        imgui.Separator()
-        imgui.Spacing()
-
-        imgui.BeginChild("CommandsRegion", imgui.ImVec2(0, -35), true)
-            local windowWidth = imgui.GetContentRegionAvailWidth()
-            local columnWidth = (windowWidth / 2) - 10
-
-            for i = 1, #cmds_hitmen, 2 do
-                imgui.BeginGroup()
-                    DrawCmdRow(cmds_hitmen[i], columnWidth)
-                imgui.EndGroup()
-
-                if cmds_hitmen[i+1] then
-                    imgui.SameLine(columnWidth + 20)
-                    imgui.BeginGroup()
-                        DrawCmdRow(cmds_hitmen[i+1], columnWidth)
-                    imgui.EndGroup()
-                end
-                imgui.Separator()
-            end
-        imgui.EndChild()
-
-        if imgui.Button(t("Close"), imgui.ImVec2(-1, 25)) then
-            shorts_window_state.v = false
-        end
-
-        local textStatic = "Created by "
-        local textTag = "[TLG]"
-        local textName = "allecsei"
-
-        local totalWidth = imgui.CalcTextSize(textStatic .. textTag .. textName).x
-        local windowWidth = imgui.GetWindowSize().x
-
-        imgui.SetCursorPos(imgui.ImVec2((windowWidth - totalWidth) / 2, 780))
-
-        imgui.TextColored(imgui.ImVec4(1.00, 1.00, 1.00, 1.00), textStatic)
-        imgui.SameLine(0, 0)
-
-        imgui.TextColored(imgui.ImVec4(0.05, 0.80, 0.89, 1.00), textTag)
-        imgui.SameLine(0, 0)
-
-        imgui.TextColored(imgui.ImVec4(0.67, 0.20, 0.20, 1.00), textName)
-
-        imgui.End()
-      end
-    end
+    drawShortcutsWindow()
+else
+    shortcuts_window_initialized = false
+end
 end
 
----------------------------- SAMP EVENTS ----------------------------
-
+------------------------------------------------------------- Server message -------------------------------------------------
 function sampev.onServerMessage(color, text)
     local playerName = sampGetPlayerNickname(select(2, sampGetPlayerIdByCharHandle(PLAYER_PED)))
 
-    -- ========================= AUTOFIND SECTION =========================
-    if shortcut_states["autofind"] and shortcut_states["autofind"].v then
-        -- Detect contract taken (English)
+     ---------------------------- AUTOFIND SECTION ----------------------------
+    if shortcut_states["autofind"] and shortcut_states["autofind"].v then       
         if text:find("%* .+ took the contract on%: .+ %((%d+)%)") then
             local nickname, targetId = text:match("%* (.+) took the contract on%: .+ %((%d+)%)")
             if nickname == playerName then
@@ -1377,9 +1420,8 @@ function sampev.onServerMessage(color, text)
         end
     end
 
-    -- ========================= TSO (THE SILENT ONE) SECTION =========================
-    if tso_state and tso_state.v then
-        -- Romanian contract fulfillment
+    ---------------------------- TSO (THE SILENT ONE) SECTION ----------------------------
+    if tso_state and tso_state.v then       
         if text:find("<< Asasinul (.+) a finalizat contractul pe (.+) de la (.+)m si a obtinut (.+)%$ >>") then
             lua_thread.create(function()
                 wait(50)
@@ -1411,64 +1453,51 @@ function sampev.onServerMessage(color, text)
     end
 
     -- ========================= GETHIT COOLDOWN SECTION =========================
-    if hitcooldown_state and hitcooldown_state.v then
-        -- Agency waiting time over notification
-        if text:find("%* Agentie%: Timpul tau de asteptare pentru gethit s%-a terminat%. Poti da gethit din nou%.") or
-           text:find("%* Agency%: Your gethit waiting time is over%. You can now gethit again%.") then
-            lua_thread.create(function()
-                wait(50)
-                local notifMsg = english_state.v and "Your waiting time for getting a new contract has ended. You can now get a new contract." or "Timpul tau de asteptare s-a incheiat. Poti lua un nou contract."
-                showWindowsNotification(nil, "Agency Reminder", notifMsg)
-            end)
+    local cleanText = text:gsub("{%x%x%x%x%x%x}", "")
+    if hitcooldown_state.v then
+        local nickname, dist = cleanText:match("<< Asasinul%s+(.-)%s+a finalizat contractul .- de la%s+(.-)m")
+        if not nickname then
+            nickname, dist = cleanText:match("<< Hitman%s+(.-)%s+has fulfilled the contract .- from%s+(.-)m")
         end
 
-        -- Contract fulfillment handling (both languages)
-        local nickname, target, dist, reward = text:match("<< Asasinul (.+) a finalizat contractul pe (.+) de la (%d+)m si a obtinut (.+)%$ >>") or
-                                           text:match("<< Hitman (.+) has fulfilled the contract on (.+) from (%d+)m and collected %$(.+) >>")
+        if nickname and dist then  
+            if nickname == playerName then
+                local distance = tonumber(dist)
+                
+                if distance then
+                    sampProcessChatInput("/track") 
+                    local waitTime = 0
 
-        if nickname == playerName and dist then
-            local distance = tonumber(dist)
-            local waitTime = 0
-
-            -- Determine cooldown based on distance
-            if text:find("tinta s%-a sinucis") then
-                waitTime = 300
-            elseif distance >= 300 then
-                waitTime = 0 -- No cooldown
-            elseif distance >= 250 then
-                waitTime = 300
-            elseif distance >= 200 then
-                waitTime = 600
-            elseif distance >= 150 then
-                waitTime = 900
-            else
-                waitTime = 900
-            end
-
-            if waitTime > 0 then
-                lua_thread.create(function()
-                    for i = waitTime, 0, -1 do
-                        if i == 0 then
-                            if english_state.v then
-                                sampAddChatMessage("{aa3333}[Hitmen Helper]{ffffff} You can now gethit.", -1)
-                                printStringNow("You can now ~g~gethit.", 2000)
-                            else
-                                sampAddChatMessage("{aa3333}[Hitmen Helper]{ffffff} Poti procura un nou contract. ({aa3333}gethit{ffffff})", -1)
-                                printStringNow("Poti procura un nou ~g~contract.", 2000)
-                            end
-                        else
-                            local timerMsg = english_state.v and ("Gethit time:~r~ " .. string.format("%02d:%02d", math.floor(i / 60), i % 60)) or ("Timp gethit:~r~ " .. string.format("%02d:%02d", math.floor(i / 60), i % 60))
-                            printStringNow(timerMsg, 1000)
-                        end
-                        wait(1000)
+                    if cleanText:find("tinta s-a sinucis") or cleanText:find("target committed suicide") then
+                        waitTime = 300
+                    elseif distance >= 300 then
+                        waitTime = 0
+                    elseif distance >= 250 then
+                        waitTime = 300
+                    elseif distance >= 200 then
+                        waitTime = 600 
+                    else
+                        waitTime = 900
                     end
-                end)
-            else
-                -- Instant notification for distance >= 300
-                if english_state.v then
-                    printStringNow("You can now ~g~gethit.", 2000)
-                else
-                    printStringNow("Poti procura un nou ~g~contract.", 2000)
+
+                    -- Pornire cronometru
+                    if waitTime > 0 then
+                        lua_thread.create(function()
+                            for i = waitTime, 0, -1 do
+                                if i == 0 then
+                                    local msgS = english_state.v and "You can now ~g~gethit." or "Poti procura un nou ~g~contract."
+                                    printStringNow(msgS, 2000)
+                                    sampAddChatMessage(english_state.v and "{aa3333}[Hitmen Helper]{ffffff} You can now gethit." or "{aa3333}[Hitmen Helper]{ffffff} Poti procura un nou contract.", -1)
+                                else
+                                    local timerStr = english_state.v and "Gethit time:~r~ " or "Timp gethit:~r~ "
+                                    printStringNow(timerStr .. string.format("%02d:%02d", math.floor(i / 60), i % 60), 1000)
+                                    wait(1000)
+                                end
+                            end
+                        end)
+                    else
+                        printStringNow(english_state.v and "You can now ~g~gethit." or "Poti procura un nou ~g~contract.", 2000)
+                    end
                 end
             end
         end
