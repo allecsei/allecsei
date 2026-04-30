@@ -1,0 +1,1598 @@
+script_name("HassleHUD")
+script_authors("Made by allecsei")
+script_version("1.2")
+
+local se = require "samp.events"
+local memory = require "memory"
+local inicfg = require "inicfg"
+local imgui = require "mimgui"
+local encoding = require "encoding"
+encoding.default = "CP1251"
+u8 = encoding.UTF8
+
+-- ==================== FFI PENTRU RADAR EDITOR ====================
+local ffi = require "ffi"
+ffi.cdef[[
+    void *malloc(size_t size);
+    void free(void *ptr);
+]]
+local libc = ffi.load("msvcrt.dll")
+
+local ini = nil  -- Va fi incarcat mai tarziu
+local radar_section = "RadarPosition"
+local radar_editor = {
+    x = 55.0,
+    y = 100.0,
+    h = 85.0,
+    w = 85.0
+}
+local radar_ui = {
+    x = imgui.new.float(55.0),
+    y = imgui.new.float(100.0),
+    h = imgui.new.float(85.0),
+    w = imgui.new.float(85.0)
+}
+local rpx, rpy, rph, rpw = nil, nil, nil, nil
+
+local function radar_clamp(v, minv, maxv)
+    if v < minv then return minv end
+    if v > maxv then return maxv end
+    return v
+end
+
+local function radar_defaultConfig()
+    return {
+        x = 55.0,
+        y = 100.0,
+        h = 85.0,
+        w = 85.0
+    }
+end
+
+local function saveRadarConfig()
+    ini[radar_section] = {
+        x = radar_editor.x,
+        y = radar_editor.y,
+        h = radar_editor.h,
+        w = radar_editor.w
+    }
+    if not inicfg.save(ini, "HassleHUD.ini") then
+        return false
+    end
+    return true
+end
+
+local function loadRadarConfig()
+    if ini and ini[radar_section] then
+        local data = ini[radar_section]
+        radar_editor.x = tonumber(data.x) or 55.0
+        radar_editor.y = tonumber(data.y) or 100.0
+        radar_editor.h = tonumber(data.h) or 85.0
+        radar_editor.w = tonumber(data.w) or 85.0
+        radar_ui.x[0] = radar_editor.x
+        radar_ui.y[0] = radar_editor.y
+        radar_ui.h[0] = radar_editor.h
+        radar_ui.w[0] = radar_editor.w
+        return
+    end
+    radar_editor = radar_defaultConfig()
+end
+
+local function radar_freeOne(p)
+    if p ~= nil then
+        libc.free(p)
+    end
+end
+
+local function radar_allocf(v)
+    local p = ffi.cast("float*", libc.malloc(4))
+    p[0] = v
+    return p
+end
+
+local function radar_applyX(v)
+    radar_freeOne(rpx)
+    rpx = radar_allocf(v)
+    ffi.cast("float**", 0x58A79B)[0] = rpx
+    ffi.cast("float**", 0x5834D4)[0] = rpx
+    ffi.cast("float**", 0x58A836)[0] = rpx
+    ffi.cast("float**", 0x58A8E9)[0] = rpx
+    ffi.cast("float**", 0x58A98A)[0] = rpx
+    ffi.cast("float**", 0x58A469)[0] = rpx
+    ffi.cast("float**", 0x58A5E2)[0] = rpx
+    ffi.cast("float**", 0x58A6E6)[0] = rpx
+end
+
+local function radar_applyY(v)
+    radar_freeOne(rpy)
+    rpy = radar_allocf(v)
+    ffi.cast("float**", 0x58A7C7)[0] = rpy
+    ffi.cast("float**", 0x58A868)[0] = rpy
+    ffi.cast("float**", 0x58A913)[0] = rpy
+    ffi.cast("float**", 0x58A9C7)[0] = rpy
+    ffi.cast("float**", 0x583500)[0] = rpy
+    ffi.cast("float**", 0x58A499)[0] = rpy
+    ffi.cast("float**", 0x58A60E)[0] = rpy
+    ffi.cast("float**", 0x58A71E)[0] = rpy
+end
+
+local function radar_applyH(v)
+    radar_freeOne(rph)
+    rph = radar_allocf(v)
+    ffi.cast("float**", 0x58A47D)[0] = rph
+    ffi.cast("float**", 0x58A632)[0] = rph
+    ffi.cast("float**", 0x58A6AB)[0] = rph
+    ffi.cast("float**", 0x58A70E)[0] = rph
+    ffi.cast("float**", 0x58A801)[0] = rph
+    ffi.cast("float**", 0x58A8AB)[0] = rph
+    ffi.cast("float**", 0x58A921)[0] = rph
+    ffi.cast("float**", 0x58A9D5)[0] = rph
+    ffi.cast("float**", 0x5834F6)[0] = rph
+end
+
+local function radar_applyW(v)
+    radar_freeOne(rpw)
+    rpw = radar_allocf(v)
+    ffi.cast("float**", 0x5834C2)[0] = rpw
+    ffi.cast("float**", 0x58A449)[0] = rpw
+    ffi.cast("float**", 0x58A7E9)[0] = rpw
+    ffi.cast("float**", 0x58A840)[0] = rpw
+    ffi.cast("float**", 0x58A943)[0] = rpw
+    ffi.cast("float**", 0x58A99D)[0] = rpw
+end
+
+local function radar_applyAll()
+    if sampIsLocalPlayerSpawned() then
+        radar_applyX(radar_editor.x)
+        radar_applyY(radar_editor.y)
+        radar_applyH(radar_editor.h)
+        radar_applyW(radar_editor.w)
+    end
+end
+
+local function radar_resetDefaults()
+    radar_editor = radar_defaultConfig()
+    radar_ui.x[0] = radar_editor.x
+    radar_ui.y[0] = radar_editor.y
+    radar_ui.h[0] = radar_editor.h
+    radar_ui.w[0] = radar_editor.w
+    radar_applyAll()
+    saveRadarConfig()
+end
+
+ini = inicfg.load({
+	main = {
+		x = select(1, getScreenResolution()) - 130,
+		y = 110,
+		satiety = false,
+		se_timer = 300,
+		orig_hud = false,
+		values = false,
+		size = 2,
+		max_hp = 100,
+		show_indicator3 = true,
+		theme = 0,
+	},
+	position = {
+		hp_x = 0,
+		hp_y = 0,
+		armor_x = 0,
+		armor_y = 0,
+		satiety_x = 0,
+		satiety_y = 0,
+		money_x = 0,
+		money_y = 0,
+		ammo_x = 0,
+		ammo_y = 0,
+	},
+	RadarPosition = {
+		x = 55.0,
+		y = 100.0,
+		h = 85.0,
+		w = 85.0,
+	},
+	color_hp = { 0.53, 0.81, 0.97 },
+	color_ap = { 0.90, 0.90, 0.90 },
+	color_se = { 1.00, 0.75, 0.35 },
+	color_be = { 0.00, 0.70, 1.00 },
+	color_money = { 1.00, 1.00, 1.00 },
+	theme_colors = {
+		header = { 0.35, 0.05, 0.55 },
+		button_active = { 0.55, 0.1, 0.85 },
+		button_hover = { 0.65, 0.2, 0.95 },
+		accent = { 0.85, 0.45, 1, 1 },
+		child_bg = { 0.18, 0.18, 0.18 },
+		window_bg = { 0.14, 0.14, 0.14 },
+	}
+}, "HassleHUD.ini")
+
+-- Incarca setarile radarului din INI
+loadRadarConfig()
+
+local settings = imgui.new.bool()
+local orig_hud = imgui.new.bool(ini.main.orig_hud)
+local values = imgui.new.bool(ini.main.values)
+local hudSize = imgui.new.int(ini.main.size)
+local max_hp = imgui.new.int(ini.main.max_hp)
+local show_indicator3 = imgui.new.bool(ini.main.show_indicator3)
+local current_theme = imgui.new.int(ini.main.theme)
+local show_theme_menu = imgui.new.bool(false)
+
+-- F7 HUD visibility states: 0 = normal, 1 = semi-transparent, 2 = hidden
+local hud_visibility_state = imgui.new.int(0)
+local f7_key_pressed = false
+
+-- ==================== TEME PREDEFINITE ====================
+local themes = {
+	[0] = {
+		name = "Electric Blue",
+		header = { 0/255, 0/255, 255/255 },
+		button_active = { 20/255, 80/255, 255/255 },
+		button_hover = { 80/255, 140/255, 255/255 },
+		accent = { 0/255, 0/255, 255/255, 1 },
+		child_bg = { 0.03, 0.03, 0.10 },
+		window_bg = { 0.02, 0.02, 0.06 },
+		text = { 1, 1, 1, 1 },
+	},
+
+	[1] = {
+		name = "Inferno Red",
+		header = { 237/255, 0/255, 0/255 },
+		button_active = { 255/255, 40/255, 40/255 },
+		button_hover = { 255/255, 90/255, 90/255 },
+		accent = { 237/255, 0/255, 0/255, 1 },
+		child_bg = { 0.10, 0.02, 0.02 },
+		window_bg = { 0.06, 0.01, 0.01 },
+		text = { 1, 1, 1, 1 },
+	},
+
+	[2] = {
+		name = "Silver Mist",
+		header = { 175/255, 175/255, 175/255 },
+		button_active = { 210/255, 210/255, 210/255 },
+		button_hover = { 240/255, 240/255, 240/255 },
+		accent = { 175/255, 175/255, 175/255, 1 },
+		child_bg = { 0.10, 0.10, 0.10 },
+		window_bg = { 0.06, 0.06, 0.06 },
+		text = { 1, 1, 1, 1 },
+	},
+
+	[3] = {
+		name = "Mint Glow",
+		header = { 135/255, 233/255, 144/255 },
+		button_active = { 90/255, 255/255, 170/255 },
+		button_hover = { 180/255, 255/255, 200/255 },
+		accent = { 135/255, 233/255, 144/255, 1 },
+		child_bg = { 0.05, 0.12, 0.08 },
+		window_bg = { 0.03, 0.08, 0.05 },
+		text = { 1, 1, 1, 1 },
+	},
+
+	[4] = {
+		name = "Neon Green",
+		header = { 0/255, 255/255, 0/255 },
+		button_active = { 60/255, 255/255, 60/255 },
+		button_hover = { 140/255, 255/255, 140/255 },
+		accent = { 0/255, 255/255, 0/255, 1 },
+		child_bg = { 0.02, 0.10, 0.02 },
+		window_bg = { 0.01, 0.06, 0.01 },
+		text = { 1, 1, 1, 1 },
+	},
+
+	[5] = {
+		name = "Aqua Pulse",
+		header = { 0/255, 255/255, 213/255 },
+		button_active = { 40/255, 255/255, 230/255 },
+		button_hover = { 120/255, 255/255, 240/255 },
+		accent = { 0/255, 255/255, 213/255, 1 },
+		child_bg = { 0.02, 0.10, 0.10 },
+		window_bg = { 0.01, 0.06, 0.06 },
+		text = { 1, 1, 1, 1 },
+	},
+
+	[6] = {
+		name = "Crimson Flash",
+		header = { 255/255, 0/255, 51/255 },
+		button_active = { 255/255, 60/255, 90/255 },
+		button_hover = { 255/255, 120/255, 140/255 },
+		accent = { 255/255, 0/255, 51/255, 1 },
+		child_bg = { 0.10, 0.02, 0.04 },
+		window_bg = { 0.06, 0.01, 0.02 },
+		text = { 1, 1, 1, 1 },
+	},
+
+	[7] = {
+		name = "Royal Violet",
+		header = { 81/255, 0/255, 194/255 },
+		button_active = { 140/255, 60/255, 255/255 },
+		button_hover = { 180/255, 120/255, 255/255 },
+		accent = { 81/255, 0/255, 194/255, 1 },
+		child_bg = { 0.06, 0.02, 0.10 },
+		window_bg = { 0.03, 0.01, 0.06 },
+		text = { 1, 1, 1, 1 },
+	},
+
+	[8] = {
+		name = "Lime Shock",
+		header = { 185/255, 255/255, 20/255 },
+		button_active = { 220/255, 255/255, 80/255 },
+		button_hover = { 240/255, 255/255, 140/255 },
+		accent = { 185/255, 255/255, 20/255, 1 },
+		child_bg = { 0.08, 0.10, 0.02 },
+		window_bg = { 0.05, 0.06, 0.01 },
+		text = { 1, 1, 1, 1 },
+	},
+}
+
+local pos_hp_x = imgui.new.float(ini.position.hp_x)
+local pos_hp_y = imgui.new.float(ini.position.hp_y)
+local pos_armor_x = imgui.new.float(ini.position.armor_x)
+local pos_armor_y = imgui.new.float(ini.position.armor_y)
+local pos_satiety_x = imgui.new.float(ini.position.satiety_x)
+local pos_satiety_y = imgui.new.float(ini.position.satiety_y)
+local pos_money_x = imgui.new.float(ini.position.money_x)
+local pos_money_y = imgui.new.float(ini.position.money_y)
+local pos_ammo_x = imgui.new.float(ini.position.ammo_x)
+local pos_ammo_y = imgui.new.float(ini.position.ammo_y)
+
+local edit_mode = imgui.new.int(0)
+local color = {
+	hp = imgui.new.float[3](table.unpack(ini.color_hp)),
+	ap = imgui.new.float[3](table.unpack(ini.color_ap)),
+	se = imgui.new.float[3](table.unpack(ini.color_se)),
+	be = imgui.new.float[3](table.unpack(ini.color_be)),
+	money = imgui.new.float[3](table.unpack(ini.color_money))
+}
+local satiety = {
+	state = imgui.new.int(ini.main.satiety and 1 or 0),
+	timer = imgui.new.int(ini.main.se_timer),
+	count = 100
+}
+
+local SE_CLOCK = nil
+local SE_AWAIT = false
+
+local tab_selected = imgui.new.int(0)
+
+imgui.OnInitialize(function()
+	imgui.SwitchContext()
+	imgui.GetStyle().AntiAliasedFill = false
+
+	local DIR_IMAGES = getWorkingDirectory() .. "\\resource\\HassleHUD"
+	local font_path = {
+		getWorkingDirectory() .. "\\resource\\fonts\\unineueheavy-italic.ttf",
+		getFolderPath(0x14) .. "\\trebucbd.ttf"
+	}
+	assert(doesDirectoryExist(DIR_IMAGES), "{FF0000}Directorul cu imaginile armelor nu a fost gasit!")
+
+	weapons = {}
+	for i = 0, 46 do
+		local path = string.format("%s\\%s.png", DIR_IMAGES, i)
+		if doesFileExist(path) then
+			weapons[i] = imgui.CreateTextureFromFile(path)
+		end
+	end
+
+	icons = {}
+	for name, data in pairs(icons85) do
+		icons[name] = imgui.CreateTextureFromFileInMemory(imgui.new('const char*', data), #data)
+	end
+
+	if doesFileExist(font_path[1]) then
+		local Fonts = imgui.GetIO().Fonts
+		local builder = imgui.ImFontGlyphRangesBuilder()
+	    builder:AddRanges(Fonts:GetGlyphRangesCyrillic())
+	    builder:AddText("Unineueheavy-italic")
+	    local range = imgui.ImVector_ImWchar()
+	    builder:BuildRanges(range)
+
+		Fonts:Clear()
+		font_hud = Fonts:AddFontFromFileTTF(font_path[1], ({ 20, 25, 30 })[ini.main.size], nil, range[0].Data)
+		font_min = Fonts:AddFontFromFileTTF(font_path[1], ({ 10, 15, 20 })[ini.main.size], nil, range[0].Data)
+		font_money = Fonts:AddFontFromFileTTF(font_path[1], 35, nil, range[0].Data)
+		font_set = Fonts:AddFontFromFileTTF(font_path[2], 15, nil, range[0].Data)
+	else
+		print("{FF3030}Fontul 'Unineueheavy' nu a fost gasit! Se va folosi fontul implicit")
+	end
+
+	u32 = imgui.ColorConvertFloat4ToU32
+	imgui.GetIO().IniFilename = nil
+
+	imgui.SwitchContext()
+
+	local style = imgui.GetStyle()
+	local colors = style.Colors
+
+	style.WindowPadding = imgui.ImVec2(8, 8)
+	style.WindowRounding = 6
+	style.FramePadding = imgui.ImVec2(5, 3)
+	style.FrameRounding = 3
+	style.ItemSpacing = imgui.ImVec2(5, 4)
+	style.ItemInnerSpacing = imgui.ImVec2(4, 4)
+	style.IndentSpacing = 21
+	style.WindowTitleAlign = imgui.ImVec2(0.5, 0.5)
+	style.ButtonTextAlign = imgui.ImVec2(0.5, 0.5)
+
+	colors[imgui.Col.Text] = imgui.ImVec4(0.95, 0.96, 0.98, 1)
+	colors[imgui.Col.WindowBg] = imgui.ImVec4(0.14, 0.14, 0.14, 1)
+	colors[imgui.Col.PopupBg] = imgui.ImVec4(0.08, 0.08, 0.08, 0.94)
+	colors[imgui.Col.Border] = imgui.ImVec4(0.14, 0.14, 0.14, 1)
+	colors[imgui.Col.BorderShadow] = imgui.ImVec4(1, 1, 1, 0.1)
+	colors[imgui.Col.FrameBg] = imgui.ImVec4(0.22, 0.22, 0.22, 1)
+	colors[imgui.Col.FrameBgHovered] = imgui.ImVec4(0.18, 0.18, 0.18, 1)
+	colors[imgui.Col.FrameBgActive] = imgui.ImVec4(0.25, 0.25, 0.25, 1)
+	colors[imgui.Col.TitleBg] = imgui.ImVec4(0.14, 0.14, 0.14, 0.81)
+	colors[imgui.Col.TitleBgActive] = imgui.ImVec4(0.18, 0.18, 0.18, 1)
+	colors[imgui.Col.TitleBgCollapsed] = imgui.ImVec4(0, 0, 0, 0.51)
+	colors[imgui.Col.SliderGrab] = imgui.ImVec4(0.46, 0, 1, 1)
+	colors[imgui.Col.SliderGrabActive] = imgui.ImVec4(0.46, 0, 1, 1)
+	colors[imgui.Col.CheckMark] = imgui.ImVec4(0.68, 0.41, 1, 1)
+	colors[imgui.Col.Button] = imgui.ImVec4(0.51, 0.1, 1, 0.7)
+	colors[imgui.Col.ButtonHovered] = imgui.ImVec4(0.51, 0.1, 1, 0.5)
+	colors[imgui.Col.ButtonActive] = imgui.ImVec4(0.46, 0, 1, 1)
+	colors[imgui.Col.Separator] = imgui.ImVec4(0.17, 0.17, 0.17, 1)
+	colors[imgui.Col.TextSelectedBg] = imgui.ImVec4(0.46, 0, 1, 0.3)
+end)
+
+function main()
+	while not isSampAvailable() do wait(0) end
+	if orig_hud[0] == false then displayHud(false) end
+
+	-- Incarcam config radar
+	loadRadarConfig()
+	radar_applyAll()
+
+	sampRegisterChatCommand("hassle", function()
+		settings[0] = not settings[0]
+	end)
+
+	sampAddChatMessage("{eb4034}HassleHUD {FFFFFF}made by {eb4034}allecsei {FFFFFF}| Comanda: {eb4034}/hassle", 0xFFFFFF)
+	sampAddChatMessage("{eb4034}HassleHUD {FFFFFF}F7 toggle: Normal -> Transparent -> Hidden -> Normal", 0xFFFFFF)
+
+	while true do
+		wait(0)
+
+		-- F7 key handling for HUD visibility toggle
+		-- State 0 = normal, 1 = semi-transparent, 2 = hidden
+		if isKeyDown(0x76) then -- VK_F7 = 0x76
+			if not f7_key_pressed then
+				f7_key_pressed = true
+
+				if hud_visibility_state[0] == 0 then		
+					hud_visibility_state[0] = 1
+					sampAddChatMessage("{eb4034}HassleHUD {FFFFFF}HUD: Semi-transparent (30%)", 0xFFFFFF)
+				elseif hud_visibility_state[0] == 1 then				
+					hud_visibility_state[0] = 2
+					sampAddChatMessage("{eb4034}HassleHUD {FFFFFF}HUD: Hidden", 0xFFFFFF)
+				else			
+					hud_visibility_state[0] = 0
+					sampAddChatMessage("{eb4034}HassleHUD {FFFFFF}HUD: Normal", 0xFFFFFF)
+				end
+			end
+		else
+			f7_key_pressed = false
+		end
+	end
+end
+
+function se.onShowDialog(id, style, title, button1, button2, text)
+	if SE_AWAIT then
+		local count = string.match(text, "(%d+%.?%d*)%s*/%s*100%.0")
+		if count ~= nil then
+			SE_AWAIT = false
+			satiety.count = tonumber(count)
+			lua_thread.create(function()
+				wait(300)
+				sampSendDialogResponse(id, 0, nil, nil)
+			end)
+			return false
+		end
+	end
+end
+
+anim_breath = {
+	state = false,
+	duration = 0.5,
+	timer = nil
+}
+
+local hud_frame = imgui.OnFrame(
+	function() return not isPauseMenuActive() and not sampIsScoreboardOpen() and hud_visibility_state[0] < 2 end,
+	function(self)
+		self.HideCursor = true
+
+		local alpha_mult = (hud_visibility_state[0] == 1) and 0.3 or 1.0
+
+		local DL = imgui.GetBackgroundDrawList()
+		local x, y = ini.main.x, ini.main.y
+
+		local radius = ({ 40, 60, 80, })[hudSize[0]]
+		local polygons = radius * 1.5
+
+		do
+			local inWater = isCharInWater(PLAYER_PED)
+			if settings[0] or process_position then inWater = true end
+			if anim_breath.state ~= inWater then
+				anim_breath.state = inWater
+				anim_breath.timer = os.clock()
+			end
+
+			if anim_breath.timer ~= nil then
+				local max_thickness = (radius / 100) * 5
+				local thickness = 0
+				if anim_breath.state then
+					thickness = bringFloatTo(0, max_thickness, anim_breath.timer, anim_breath.duration)
+				else
+					thickness = bringFloatTo(max_thickness, 0, anim_breath.timer, anim_breath.duration)
+				end
+
+				local breath = limit(getReserveOfBreath(), 0, 100)
+				if settings[0] or process_position then breath = 100 end
+				local rotation = 180 - (360 / 100) * (breath / 2)
+				local alpha = (thickness / max_thickness) * alpha_mult
+				local r, g, b = table.unpack(ini.color_be)
+				local color = imgui.ImVec4(r, g, b, alpha)
+				local _radius = radius + (thickness / 2) - 1
+
+				if thickness > 0 then
+					local a1 = 90 - (360 / 100) * (breath / 2)
+					local a2 = 90 + (360 / 100) * (breath / 2)
+
+					DL:PathClear()
+			        DL:PathArcTo(imgui.ImVec2(x, y), radius, math.rad(a1), math.rad(a2), polygons)
+			        local bg_color = imgui.ImVec4(r, g, b, (alpha / 10) * alpha_mult)
+					DL:PathFillConvex(u32(bg_color))
+
+					DL:PathClear()
+			        DL:PathArcTo(imgui.ImVec2(x, y), radius, math.rad(a1), math.rad(a2), polygons)
+					DL:PathStroke(u32(color), false, thickness)
+
+				    if values[0] then
+						imgui.PushFont(font_min)
+						local text = string.format("%d%%", breath)
+						local ts = imgui.CalcTextSize(text)
+						local pos = imgui.ImVec2(x - (ts.x / 2), y + radius - ts.y - 5)
+						DL:AddText(imgui.ImVec2(pos.x + 1, pos.y + 1), 0x70000000, text)
+						DL:AddText(pos, u32(imgui.ImVec4(1, 1, 1, alpha)), text)
+						imgui.PopFont()
+					end
+				end
+			end
+		end
+
+		local weapon_id = getCurrentCharWeapon(PLAYER_PED)
+		if weapons[weapon_id] ~= nil then
+			local size = imgui.ImVec2(radius * 1.3, radius * 1.5)
+			local A = imgui.ImVec2(x - size.x / 2, y - size.y / 2)
+			local B = imgui.ImVec2(A.x + size.x, A.y + size.y)
+			local weapon_alpha = alpha_mult
+			DL:AddImage(weapons[weapon_id], A, B, nil, nil, nil, nil, nil, weapon_alpha)
+		end
+
+		local ammo = getAmmoInCharWeapon(PLAYER_PED, weapon_id)
+		if ammo > 0 then
+			local clip = getAmmoInClip()
+			local text = string.format("%d/%d", clip, ammo)
+			local len = imgui.CalcTextSize(text).x
+			local sizeOffsetY = ({ 0, 10, 20 })[hudSize[0]]
+			local ammoSizeY = ({ -5, 0, 5 })[hudSize[0]]
+			local offset_x = pos_ammo_x[0]
+			local offset_y = pos_ammo_y[0]
+			local ammo_color = u32(imgui.ImVec4(1, 1, 1, alpha_mult))
+			DL:AddText(imgui.ImVec2(x - (len / 2) + offset_x, y + radius + 10 + sizeOffsetY + ammoSizeY + offset_y), ammo_color, text)
+		end
+
+		local rounding = 20
+		local height = ({ 10, 15, 20 })[hudSize[0]]
+		local len = ({ { 150, 100 }, { 200, 150 }, { 250, 200 } })[hudSize[0]]
+		local offsL = { 10, 30 }
+		local spacingY = ({ 20, 30, 40 })[hudSize[0]]
+		local iconRad = ({ 10, 12, 14 })[hudSize[0]]
+
+		do
+			local max_hp_val = limit(max_hp[0], 50, 100)
+			local hp = limit(getCharHealth(PLAYER_PED), 0, max_hp_val)
+			if settings[0] or process_position then hp = 50 end
+			local offset_x = pos_hp_x[0]
+			local offset_y = pos_hp_y[0]
+			local A = imgui.ImVec2( x - radius - offsL[1] - len[1] + offset_x, y - (height / 2) + offset_y )
+			local B = imgui.ImVec2( x - radius - offsL[1] - 000 + offset_x, y + (height / 2) + offset_y )
+			local r, g, b = table.unpack(ini.color_hp)
+
+			DL:AddRectFilled(A, B, u32(imgui.ImVec4(r, g, b, 0.30 * alpha_mult)), rounding, imgui.DrawCornerFlags.BotLeft + imgui.DrawCornerFlags.TopRight)
+			B.x = A.x + (len[1] / max_hp_val) * hp
+			DL:AddRectFilled(A, B, u32(imgui.ImVec4(r, g, b, 1.00 * alpha_mult)), rounding, imgui.DrawCornerFlags.BotLeft + imgui.DrawCornerFlags.TopRight)
+
+			local A = imgui.ImVec2(x - radius - offsL[1] - len[1] - 20 - iconRad + offset_x, y - iconRad + offset_y)
+			local B = imgui.ImVec2(x - radius - offsL[1] - len[1] - 20 + iconRad + offset_x, y + iconRad + offset_y)
+			DL:AddImage(icons["heart"], A, B, nil, nil, nil, nil, nil, alpha_mult)
+
+			if values[0] then
+				imgui.PushFont(font_min)
+				local text = string.format("%d HP", hp)
+				local ts = imgui.CalcTextSize(text)
+				local pos = imgui.ImVec2(x - radius - offsL[1] - (len[1] + ts.x) / 2 + offset_x, y - (ts.y / 2) + offset_y)
+				DL:AddText(imgui.ImVec2(pos.x + 1, pos.y + 1), 0x70000000, text)
+				DL:AddText(pos, u32(imgui.ImVec4(1, 1, 1, alpha_mult)), text)
+				imgui.PopFont()
+			end
+		end
+
+		do
+			local ap = limit(getCharArmour(PLAYER_PED), 0, 100)
+			if settings[0] or process_position then ap = 50 end
+			local offset_x = pos_armor_x[0]
+			local offset_y = pos_armor_y[0]
+			local A = imgui.ImVec2( x - radius - offsL[2] - len[2] + offset_x, y - spacingY - (height / 2) + offset_y )
+			local B = imgui.ImVec2( x - radius - offsL[2] - 000 + offset_x, y - spacingY + (height / 2) + offset_y )
+			local r, g, b = table.unpack(ini.color_ap)
+
+			DL:AddRectFilled(A, B, u32(imgui.ImVec4(r, g, b, 0.30 * alpha_mult)), rounding, imgui.DrawCornerFlags.TopLeft + imgui.DrawCornerFlags.BotRight)
+			B.x = A.x + (len[2] / 100) * ap
+			DL:AddRectFilled(A, B, u32(imgui.ImVec4(r, g, b, 1.00 * alpha_mult)), rounding, imgui.DrawCornerFlags.TopLeft + imgui.DrawCornerFlags.BotRight)
+
+			local A = imgui.ImVec2(x - radius - offsL[2] - len[2] - 20 - iconRad + offset_x, y - spacingY - iconRad + offset_y)
+			local B = imgui.ImVec2(x - radius - offsL[2] - len[2] - 20 + iconRad + offset_x, y - spacingY + iconRad + offset_y)
+			DL:AddImage(icons["shield"], A, B, nil, nil, nil, nil, nil, alpha_mult)
+
+			if values[0] then
+				imgui.PushFont(font_min)
+				local text = string.format("%d AP", ap)
+				local ts = imgui.CalcTextSize(text)
+				local pos = imgui.ImVec2(x - radius - offsL[1] - (len[1] + ts.x) / 2 + offset_x, y - spacingY - (ts.y / 2) + offset_y)
+				DL:AddText(imgui.ImVec2(pos.x + 1, pos.y + 1), 0x70000000, text)
+				DL:AddText(pos, u32(imgui.ImVec4(1, 1, 1, alpha_mult)), text)
+				imgui.PopFont()
+			end
+		end
+
+		do
+			if not show_indicator3[0] then
+			else
+				local count = limit(satiety.state[0] == 1 and satiety.count or getReserveOfStamina(), 0, 100)
+				if settings[0] or process_position then count = 50 end
+				local offset_x = pos_satiety_x[0]
+				local offset_y = pos_satiety_y[0]
+				local A = imgui.ImVec2( x - radius - offsL[2] - len[2] + offset_x, y + spacingY - (height / 2) + offset_y )
+				local B = imgui.ImVec2( x - radius - offsL[2] - 000 + offset_x, y + spacingY + (height / 2) + offset_y )
+				local r, g, b = table.unpack(ini.color_se)
+
+				DL:AddRectFilled(A, B, u32(imgui.ImVec4(r, g, b, 0.30 * alpha_mult)), rounding, imgui.DrawCornerFlags.BotLeft + imgui.DrawCornerFlags.TopRight)
+				B.x = A.x + (len[2] / 100) * count
+				DL:AddRectFilled(A, B, u32(imgui.ImVec4(r, g, b, 1.00 * alpha_mult)), rounding, imgui.DrawCornerFlags.BotLeft + imgui.DrawCornerFlags.TopRight)
+
+				local A = imgui.ImVec2(x - radius - offsL[2] - len[2] - 20 - iconRad + offset_x, y + spacingY - iconRad + offset_y)
+				local B = imgui.ImVec2(x - radius - offsL[2] - len[2] - 20 + iconRad + offset_x, y + spacingY + iconRad + offset_y)
+				DL:AddImage(icons[satiety.state[0] == 1 and "hungry" or "stamina"], A, B, nil, nil, nil, nil, nil, alpha_mult)
+
+				if values[0] then
+					imgui.PushFont(font_min)
+					local text = string.format("%d%%", count)
+					local ts = imgui.CalcTextSize(text)
+					local pos = imgui.ImVec2(x - radius - offsL[1] - (len[1] + ts.x) / 2 + offset_x, y + spacingY - (ts.y / 2) + offset_y)
+					DL:AddText(imgui.ImVec2(pos.x + 1, pos.y + 1), 0x70000000, text)
+					DL:AddText(pos, u32(imgui.ImVec4(1, 1, 1, alpha_mult)), text)
+					imgui.PopFont()
+				end
+			end
+		end
+
+		do
+			imgui.PushFont(font_money)
+			local money = getPlayerMoney(PLAYER_HANDLE)
+			if settings[0] or process_position then money = 1234567890 end
+			local text = string.format("$ %s", int_separator(money))
+			local len = imgui.CalcTextSize(text).x
+			local h = ({ 30, 50, 70 })[hudSize[0]]
+			local mr, mg, mb = table.unpack(ini.color_money)
+			local offset_x = pos_money_x[0]
+			local offset_y = pos_money_y[0]
+			DL:AddText(imgui.ImVec2( x - radius - 30 - len + offset_x, y + h + offset_y), u32(imgui.ImVec4(mr, mg, mb, alpha_mult)), text)
+			imgui.PopFont()
+		end
+
+		do
+			local wanted = getPlayerWanted()
+			if settings[0] or process_position then wanted = 6 end
+			if wanted > 0 then
+				local angles = { 40, 60, 80, 100, 120, 140 }
+				local size = ({ 18, 24, 30 })[hudSize[0]]
+				local offset = ({ 20, 30, 40 })[hudSize[0]]
+
+				for i = 1, 6 do
+			        local centre = imgui.ImVec2(
+			            x - ((radius + offset) * math.sin(math.rad(angles[i] - 180))),
+			            y - ((radius + offset) * math.cos(math.rad(angles[i] - 180)))
+			        )
+
+			        local A = imgui.ImVec2(centre.x - (size / 2), centre.y - (size / 2))
+					local B = imgui.ImVec2(centre.x + (size / 2), centre.y + (size / 2))
+					local star_alpha = alpha_mult
+					DL:AddImage(icons["star"], A, B, nil, nil, nil, nil, nil, star_alpha)
+				end
+			end
+		end
+	end
+)
+
+-- ==================== NOU MARE SI FRUMOS SETTINGS FRAME ====================
+local settings_frame = imgui.OnFrame(
+	function() return settings[0] end,
+	function(self)
+		imgui.PushFont(font_set)
+
+		local W = 600
+		local H = 800
+
+		imgui.SetNextWindowSize(imgui.ImVec2(W, H), imgui.Cond.Once)
+		imgui.SetNextWindowPos(imgui.ImVec2((select(1, getScreenResolution()) - W) / 2, (select(2, getScreenResolution()) - H) / 2), imgui.Cond.Once)
+
+		imgui.Begin(u8("HassleHUD v1.1"), settings, imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse )
+
+		-- HEADER BANNER CU CULORI TEMA
+		imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(themes[current_theme[0]].header[1], themes[current_theme[0]].header[2], themes[current_theme[0]].header[3], 1))
+		imgui.BeginChild("##HeaderBanner", imgui.ImVec2(W - 30, 70), false, imgui.WindowFlags.AlwaysUseWindowPadding)
+			imgui.PushFont(font_hud)
+			imgui.SetCursorPosY(15)
+			imgui.SetCursorPosX((W - 30 - imgui.CalcTextSize("HassleHUD").x) / 2)
+			imgui.TextColored(imgui.ImVec4(0, 0, 0, 1), u8("HassleHUD"))
+			imgui.PopFont()
+			imgui.PushFont(font_set)
+			imgui.SetCursorPosY(45)
+			imgui.SetCursorPosX((W - 30 - imgui.CalcTextSize("Theme Update v1.1").x) / 2)
+			imgui.TextColored(imgui.ImVec4(0, 0, 0, 1), u8("Theme Update v1.1"))
+			imgui.PopFont()
+		imgui.EndChild()
+		imgui.PopStyleColor()
+
+		imgui.SetCursorPosY(imgui.GetCursorPosY() + 15)
+
+		-- TABS MARI SI FRUMOSI
+		local tabs = {
+			{ u8(" Pozitii "), 0 },
+			{ u8(" Culori "), 1 },
+			{ u8(" Setari "), 2 }
+		}
+
+		imgui.SetCursorPosX((W - 480) / 2)
+		imgui.BeginGroup()
+			for i = 1, #tabs do
+				local isActive = tab_selected[0] == tabs[i][2]
+				if isActive then
+					imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(themes[current_theme[0]].button_active[1], themes[current_theme[0]].button_active[2], themes[current_theme[0]].button_active[3], 0.9))
+					imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(themes[current_theme[0]].button_hover[1], themes[current_theme[0]].button_hover[2], themes[current_theme[0]].button_hover[3], 0.9))
+					imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(themes[current_theme[0]].header[1], themes[current_theme[0]].header[2], themes[current_theme[0]].header[3], 1))
+				else
+					imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.22, 0.22, 0.22, 1))
+					imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.30, 0.30, 0.30, 1))
+					imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.18, 0.18, 0.18, 1))
+				end
+				if i > 1 then imgui.SameLine() end
+				if imgui.Button(tabs[i][1], imgui.ImVec2(150, 40)) then
+					tab_selected[0] = tabs[i][2]
+				end
+				imgui.PopStyleColor()
+				imgui.PopStyleColor()
+				imgui.PopStyleColor()
+			end
+		imgui.EndGroup()
+
+		imgui.SetCursorPosY(imgui.GetCursorPosY() + 15)
+
+		-- ==================== TAB 0: POZITII ====================
+		if tab_selected[0] == 0 then
+			imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(themes[current_theme[0]].child_bg[1], themes[current_theme[0]].child_bg[2], themes[current_theme[0]].child_bg[3], 1))
+			imgui.BeginChild("##PozitiiContainer", imgui.ImVec2(W - 30, 580), true)
+				imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(themes[current_theme[0]].accent[1], themes[current_theme[0]].accent[2], themes[current_theme[0]].accent[3], themes[current_theme[0]].accent[4]))
+				imgui.SetCursorPosX((W - 30 - imgui.CalcTextSize(u8("=== POZITII HUD ===")).x) / 2)
+				imgui.Text(u8("=== POZITII HUD ==="))
+				imgui.PopStyleColor()
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 15)
+
+				imgui.SetCursorPosX((W - 30 - 280) / 2)
+				imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(themes[current_theme[0]].button_active[1], themes[current_theme[0]].button_active[2], themes[current_theme[0]].button_active[3], 0.9))
+				imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(themes[current_theme[0]].button_hover[1], themes[current_theme[0]].button_hover[2], themes[current_theme[0]].button_hover[3], 1))
+				if imgui.Button(u8(" Schimba Pozitia Principala "), imgui.ImVec2(280, 35)) then
+					lua_thread.create(begin_change_position)
+				end
+				imgui.PopStyleColor()
+				imgui.PopStyleColor()
+
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 20)
+
+				imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(0.9, 0.9, 0.9, 1))
+				imgui.SetCursorPosX((W - 30 - imgui.CalcTextSize(u8("Modifica pozitii individuale:")).x) / 2)
+				imgui.Text(u8("Modifica pozitii individuale:"))
+				imgui.PopStyleColor()
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 10)
+
+				imgui.SetCursorPosX((W - 30 - 380) / 2)
+				imgui.BeginGroup()
+
+				-- Health (rosu modern)
+				imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.75, 0.20, 0.20, 0.85))
+				imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.90, 0.30, 0.30, 1))
+				if imgui.Button(u8(" Health "), imgui.ImVec2(85, 32)) then
+					edit_mode[0] = 1
+					lua_thread.create(function() begin_edit_position("hp") end)
+				end
+				imgui.PopStyleColor(2)
+				imgui.SameLine()
+
+				-- Armor (albastru clean)
+				imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.25, 0.45, 0.75, 0.85))
+				imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.35, 0.60, 0.90, 1))
+				if imgui.Button(u8(" Armor "), imgui.ImVec2(85, 32)) then
+					edit_mode[0] = 2
+					lua_thread.create(function() begin_edit_position("armor") end)
+				end
+				imgui.PopStyleColor(2)
+				imgui.SameLine()
+
+				-- Saturation (galben soft)
+				imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.95, 0.70, 0.30, 0.85))
+				imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(1.00, 0.80, 0.40, 1))
+				if imgui.Button(u8(" Saturation "), imgui.ImVec2(85, 32)) then
+					edit_mode[0] = 3
+					lua_thread.create(function() begin_edit_position("satiety") end)
+				end
+				imgui.PopStyleColor(2)
+				imgui.SameLine()
+
+				-- Money (verde premium)
+				imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.15, 0.65, 0.45, 0.85))
+				imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.25, 0.80, 0.55, 1))
+				if imgui.Button(u8(" Money "), imgui.ImVec2(85, 32)) then
+					edit_mode[0] = 4
+					lua_thread.create(function() begin_edit_position("money") end)
+				end
+				imgui.PopStyleColor(2)
+
+				imgui.EndGroup()
+
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 10)
+				imgui.SetCursorPosX((W - 30 - 85) / 2)
+
+				imgui.BeginGroup()
+
+				-- Bullets (portocaliu modern)
+				imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.85, 0.45, 0.20, 0.85))
+				imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(1.00, 0.55, 0.30, 1))
+				if imgui.Button(u8(" Bullets "), imgui.ImVec2(85, 32)) then
+					edit_mode[0] = 5
+					lua_thread.create(function() begin_edit_position("ammo") end)
+				end
+				imgui.PopStyleColor(2)
+
+				imgui.EndGroup()
+
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 25)
+
+				imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(0.9, 0.9, 0.9, 1))
+				imgui.SetCursorPosX((W - 30 - imgui.CalcTextSize(u8("Marime HUD:")).x) / 2)
+				imgui.Text(u8("Marime HUD:"))
+				imgui.PopStyleColor()
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 5)
+
+				imgui.SetCursorPosX((W - 30 - 320) / 2)
+				imgui.BeginGroup()
+					local isSize1Active = hudSize[0] == 1
+					imgui.PushStyleColor(imgui.Col.Button, isSize1Active and imgui.ImVec4(0.55, 0.1, 0.85, 0.9) or imgui.ImVec4(0.25, 0.25, 0.25, 1))
+					if imgui.Button(u8(" Mic "), imgui.ImVec2(100, 30)) then
+						hudSize[0] = 1
+					end
+					imgui.PopStyleColor()
+					imgui.SameLine()
+
+					local isSize2Active = hudSize[0] == 2
+					imgui.PushStyleColor(imgui.Col.Button, isSize2Active and imgui.ImVec4(0.55, 0.1, 0.85, 0.9) or imgui.ImVec4(0.25, 0.25, 0.25, 1))
+					if imgui.Button(u8(" Mediu "), imgui.ImVec2(100, 30)) then
+						hudSize[0] = 2
+					end
+					imgui.PopStyleColor()
+					imgui.SameLine()
+
+					local isSize3Active = hudSize[0] == 3
+					imgui.PushStyleColor(imgui.Col.Button, isSize3Active and imgui.ImVec4(0.55, 0.1, 0.85, 0.9) or imgui.ImVec4(0.25, 0.25, 0.25, 1))
+					if imgui.Button(u8(" Mare "), imgui.ImVec2(100, 30)) then
+						hudSize[0] = 3
+					end
+					imgui.PopStyleColor()
+				imgui.EndGroup()
+
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 10)
+				imgui.SetCursorPosX((W - 30 - 150) / 2)
+				imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.4, 0.8, 0.4, 0.8))
+				imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.4, 0.8, 0.4, 1))
+				if imgui.Button(u8(" Salveaza Marime "), imgui.ImVec2(150, 30)) then
+					ini.main.size = hudSize[0]
+					if inicfg.save(ini, "HassleHUD.ini") then
+						thisScript():reload()
+					end
+				end
+				imgui.PopStyleColor()
+				imgui.PopStyleColor()
+
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 30)
+
+				imgui.SetCursorPosX((W - 30 - 280) / 2)
+				imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.9, 0.3, 0.3, 0.8))
+				imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.9, 0.3, 0.3, 1))
+				if imgui.Button(u8(" Reseteaza Toate Pozitiile "), imgui.ImVec2(280, 35)) then
+					pos_hp_x[0] = 0; pos_hp_y[0] = 0
+					pos_armor_x[0] = 0; pos_armor_y[0] = 0
+					pos_satiety_x[0] = 0; pos_satiety_y[0] = 0
+					pos_money_x[0] = 0; pos_money_y[0] = 0
+					pos_ammo_x[0] = 0; pos_ammo_y[0] = 0
+					ini.position = {
+						hp_x = 0, hp_y = 0,
+						armor_x = 0, armor_y = 0,
+						satiety_x = 0, satiety_y = 0,
+						money_x = 0, money_y = 0,
+						ammo_x = 0, ammo_y = 0
+					}
+					inicfg.save(ini, "HassleHUD.ini")
+					sampAddChatMessage("{eb4034}Pozitiile au fost resetate!", -1)
+				end
+				imgui.PopStyleColor()
+				imgui.PopStyleColor()
+			imgui.EndChild()
+			imgui.PopStyleColor()
+
+		-- ==================== TAB 1: CULORI ====================
+		elseif tab_selected[0] == 1 then
+			imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(themes[current_theme[0]].child_bg[1], themes[current_theme[0]].child_bg[2], themes[current_theme[0]].child_bg[3], 1))
+			imgui.BeginChild("##CuloriContainer", imgui.ImVec2(W - 30, 580), true)
+				imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(themes[current_theme[0]].accent[1], themes[current_theme[0]].accent[2], themes[current_theme[0]].accent[3], themes[current_theme[0]].accent[4]))
+				imgui.SetCursorPosX((W - 30 - imgui.CalcTextSize(u8("=== CULORI INDICATORI ===")).x) / 2)
+				imgui.Text(u8("=== CULORI INDICATORI ==="))
+				imgui.PopStyleColor()
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 15)
+
+				local function ColorRow(label, colorVar, iniVar, iconColor)
+					imgui.SetCursorPosX(30)
+					imgui.BeginGroup()
+						imgui.SetNextItemWidth(120)
+						if imgui.ColorEdit3("##" .. label, colorVar, imgui.ColorEditFlags.NoInputs) then
+							iniVar[1] = colorVar[0]
+							iniVar[2] = colorVar[1]
+							iniVar[3] = colorVar[2]
+							inicfg.save(ini, "HassleHUD.ini")
+						end
+						imgui.SameLine()
+						imgui.SetCursorPosX(imgui.GetCursorPosX() + 10)
+						imgui.PushStyleColor(imgui.Col.Text, iconColor)
+						imgui.Text(label)
+						imgui.PopStyleColor()
+					imgui.EndGroup()
+					imgui.SetCursorPosY(imgui.GetCursorPosY() + 8)
+				end
+
+				ColorRow(u8("Viata (HP)"), color.hp, ini.color_hp, imgui.ImVec4(0.53, 0.81, 0.97, 1))
+				ColorRow(u8("Armura (AP)"), color.ap, ini.color_ap, imgui.ImVec4(0.90, 0.90, 0.90, 1))
+				ColorRow(u8((satiety.state[0] == 1 and "Saturatie" or "Stamina")), color.se, ini.color_se, imgui.ImVec4(1.00, 0.75, 0.35, 1))
+				ColorRow(u8("Respiratie"), color.be, ini.color_be, imgui.ImVec4(0.00, 0.70, 1.00, 1))
+				ColorRow(u8("Bani"), color.money, ini.color_money, imgui.ImVec4(0.6, 0.8, 0.2, 1))
+
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 20)
+
+				imgui.SetCursorPosX((W - 30 - 280) / 2)
+				imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.9, 0.3, 0.3, 0.8))
+				imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.9, 0.3, 0.3, 1))
+				if imgui.Button(u8(" Reseteaza Culorile Implicite "), imgui.ImVec2(280, 35)) then
+					color.hp[0], color.hp[1], color.hp[2] = 0.53, 0.81, 0.97
+					color.ap[0], color.ap[1], color.ap[2] = 0.90, 0.90, 0.90
+					color.se[0], color.se[1], color.se[2] = 1.00, 0.75, 0.35
+					color.be[0], color.be[1], color.be[2] = 0.00, 0.70, 1.00
+					color.money[0], color.money[1], color.money[2] = 1.00, 1.00, 1.00
+					ini.color_hp = { 0.53, 0.81, 0.97 }
+					ini.color_ap = { 0.90, 0.90, 0.90 }
+					ini.color_se = { 1.00, 0.75, 0.35 }
+					ini.color_be = { 0.00, 0.70, 1.00 }
+					ini.color_money = { 1.00, 1.00, 1.00 }
+					inicfg.save(ini, "HassleHUD.ini")
+					sampAddChatMessage("{eb4034}Culorile au fost resetate!", -1)
+				end
+				imgui.PopStyleColor()
+				imgui.PopStyleColor()
+
+				-- ==================== EDITOR RADAR ====================
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 10)
+				imgui.Separator()
+
+				imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(themes[current_theme[0]].accent[1], themes[current_theme[0]].accent[2], themes[current_theme[0]].accent[3], themes[current_theme[0]].accent[4]))
+				imgui.SetCursorPosX((W - 30 - imgui.CalcTextSize(u8("=== EDITOR RADAR ===")).x) / 2)
+				imgui.Text(u8("=== EDITOR RADAR ==="))
+				imgui.PopStyleColor()
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 5)
+
+				if not sampIsLocalPlayerSpawned() then
+					imgui.SetCursorPosX((W - 30 - imgui.CalcTextSize(u8("Radarul functioneaza dupa spawn!")).x) / 2)
+					imgui.TextColored(imgui.ImVec4(0.8, 0.6, 0.2, 1), u8("Radarul functioneaza dupa spawn!"))
+				end
+
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 5)
+
+				-- Radar X
+				imgui.SetCursorPosX(20)
+				imgui.Text(u8("Radar X"))
+				imgui.SetNextItemWidth(150)
+				if imgui.DragFloat("##RadarX", radar_ui.x, 0.20, 0, 1920, "%.1f") then
+					radar_ui.x[0] = radar_clamp(radar_ui.x[0], 0, 1920)
+					radar_editor.x = radar_ui.x[0]
+					radar_applyX(radar_editor.x)
+					saveRadarConfig()
+				end
+				imgui.SameLine()
+				if imgui.Button("-5##rx", imgui.ImVec2(35, 22)) then
+					radar_ui.x[0] = radar_clamp(radar_ui.x[0] - 5, 0, 1920)
+					radar_editor.x = radar_ui.x[0]
+					radar_applyX(radar_editor.x)
+					saveRadarConfig()
+				end
+				imgui.SameLine()
+				if imgui.Button("+5##rx", imgui.ImVec2(35, 22)) then
+					radar_ui.x[0] = radar_clamp(radar_ui.x[0] + 5, 0, 1920)
+					radar_editor.x = radar_ui.x[0]
+					radar_applyX(radar_editor.x)
+					saveRadarConfig()
+				end
+
+				-- Radar Y
+				imgui.SetCursorPosX(20)
+				imgui.Text(u8("Radar Y"))
+				imgui.SetNextItemWidth(150)
+				if imgui.DragFloat("##RadarY", radar_ui.y, 0.20, 0, 1080, "%.1f") then
+					radar_ui.y[0] = radar_clamp(radar_ui.y[0], 0, 1080)
+					radar_editor.y = radar_ui.y[0]
+					radar_applyY(radar_editor.y)
+					saveRadarConfig()
+				end
+				imgui.SameLine()
+				if imgui.Button("-5##ry", imgui.ImVec2(35, 22)) then
+					radar_ui.y[0] = radar_clamp(radar_ui.y[0] - 5, 0, 1080)
+					radar_editor.y = radar_ui.y[0]
+					radar_applyY(radar_editor.y)
+					saveRadarConfig()
+				end
+				imgui.SameLine()
+				if imgui.Button("+5##ry", imgui.ImVec2(35, 22)) then
+					radar_ui.y[0] = radar_clamp(radar_ui.y[0] + 5, 0, 1080)
+					radar_editor.y = radar_ui.y[0]
+					radar_applyY(radar_editor.y)
+					saveRadarConfig()
+				end
+
+				-- Radar Height
+				imgui.SetCursorPosX(20)
+				imgui.Text(u8("Inaltime"))
+				imgui.SetNextItemWidth(150)
+				if imgui.DragFloat("##RadarH", radar_ui.h, 0.20, 20, 300, "%.1f") then
+					radar_ui.h[0] = radar_clamp(radar_ui.h[0], 20, 300)
+					radar_editor.h = radar_ui.h[0]
+					radar_applyH(radar_editor.h)
+					saveRadarConfig()
+				end
+				imgui.SameLine()
+				if imgui.Button("-5##rh", imgui.ImVec2(35, 22)) then
+					radar_ui.h[0] = radar_clamp(radar_ui.h[0] - 5, 20, 300)
+					radar_editor.h = radar_ui.h[0]
+					radar_applyH(radar_editor.h)
+					saveRadarConfig()
+				end
+				imgui.SameLine()
+				if imgui.Button("+5##rh", imgui.ImVec2(35, 22)) then
+					radar_ui.h[0] = radar_clamp(radar_ui.h[0] + 5, 20, 300)
+					radar_editor.h = radar_ui.h[0]
+					radar_applyH(radar_editor.h)
+					saveRadarConfig()
+				end
+
+				-- Radar Width
+				imgui.SetCursorPosX(20)
+				imgui.Text(u8("Latime"))
+				imgui.SetNextItemWidth(150)
+				if imgui.DragFloat("##RadarW", radar_ui.w, 0.20, 20, 300, "%.1f") then
+					radar_ui.w[0] = radar_clamp(radar_ui.w[0], 20, 300)
+					radar_editor.w = radar_ui.w[0]
+					radar_applyW(radar_editor.w)
+					saveRadarConfig()
+				end
+				imgui.SameLine()
+				if imgui.Button("-5##rw", imgui.ImVec2(35, 22)) then
+					radar_ui.w[0] = radar_clamp(radar_ui.w[0] - 5, 20, 300)
+					radar_editor.w = radar_ui.w[0]
+					radar_applyW(radar_editor.w)
+					saveRadarConfig()
+				end
+				imgui.SameLine()
+				if imgui.Button("+5##rw", imgui.ImVec2(35, 22)) then
+					radar_ui.w[0] = radar_clamp(radar_ui.w[0] + 5, 20, 300)
+					radar_editor.w = radar_ui.w[0]
+					radar_applyW(radar_editor.w)
+					saveRadarConfig()
+				end
+
+				-- Reset Radar Button
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 10)
+				imgui.SetCursorPosX((W - 30 - 220) / 2)
+				imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.9, 0.5, 0.2, 0.8))
+				imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.9, 0.5, 0.2, 1))
+				if imgui.Button(u8(" Reseteaza Radar "), imgui.ImVec2(220, 30)) then
+					radar_resetDefaults()
+					sampAddChatMessage("{eb4034}Radarul a fost resetat!", -1)
+				end
+				imgui.PopStyleColor()
+				imgui.PopStyleColor()
+			imgui.EndChild()
+			imgui.PopStyleColor()
+
+		-- ==================== TAB 2: SETARI ====================
+		elseif tab_selected[0] == 2 then
+			imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(themes[current_theme[0]].child_bg[1], themes[current_theme[0]].child_bg[2], themes[current_theme[0]].child_bg[3], 1))
+			imgui.BeginChild("##SetariContainer", imgui.ImVec2(W - 30, 580), true)
+				imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(themes[current_theme[0]].accent[1], themes[current_theme[0]].accent[2], themes[current_theme[0]].accent[3], themes[current_theme[0]].accent[4]))
+				imgui.SetCursorPosX((W - 30 - imgui.CalcTextSize(u8("=== SETARI GENERALE ===")).x) / 2)
+				imgui.Text(u8("=== SETARI GENERALE ==="))
+				imgui.PopStyleColor()
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 15)
+
+				imgui.SetCursorPosX(30)
+				if imgui.Checkbox(u8("HUD Original (joc)"), orig_hud) then
+					displayHud(orig_hud[0])
+					ini.main.orig_hud = orig_hud[0]
+					inicfg.save(ini, "HassleHUD.ini")
+				end
+				if imgui.IsItemHovered() then
+					imgui.SetTooltip(u8("Arata HUD-ul standard al jocului"))
+				end
+
+				imgui.SetCursorPosX(30)
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 5)
+				if imgui.Checkbox(u8("Afiseaza Valorile pe HUD"), values) then
+					ini.main.values = values[0]
+					inicfg.save(ini, "HassleHUD.ini")
+				end
+
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 20)
+
+				imgui.SetCursorPosX(30)
+				imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(0.9, 0.9, 0.9, 1))
+				imgui.Text(u8("Valoare Maxima HP:"))
+				imgui.PopStyleColor()
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 5)
+				imgui.SetCursorPosX(30)
+				imgui.SetNextItemWidth(100)
+				if imgui.InputInt("##MaxHPVal", max_hp, 1, 10) then
+					max_hp[0] = limit(max_hp[0], 50, 100)
+				end
+				imgui.SameLine()
+				imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(themes[current_theme[0]].button_active[1], themes[current_theme[0]].button_active[2], themes[current_theme[0]].button_active[3], 0.8))
+				imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(themes[current_theme[0]].button_hover[1], themes[current_theme[0]].button_hover[2], themes[current_theme[0]].button_hover[3], 1))
+				if imgui.Button(u8(" Salveaza "), imgui.ImVec2(100, 25)) then
+					ini.main.max_hp = max_hp[0]
+					inicfg.save(ini, "HassleHUD.ini")
+					sampAddChatMessage("{eb4034}Valoarea maxima HP a fost salvata!", -1)
+				end
+				imgui.PopStyleColor()
+				imgui.PopStyleColor()
+
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 25)
+
+				imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(themes[current_theme[0]].accent[1], themes[current_theme[0]].accent[2], themes[current_theme[0]].accent[3], themes[current_theme[0]].accent[4]))
+				imgui.SetCursorPosX(30)
+				imgui.Text(u8("=== INDICATOR 3 (STAMINA/SATURATIE) ==="))
+				imgui.PopStyleColor()
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 10)
+
+				imgui.SetCursorPosX(30)
+				if imgui.Checkbox(u8("Afiseaza Indicator 3"), show_indicator3) then
+					ini.main.show_indicator3 = show_indicator3[0]
+					inicfg.save(ini, "HassleHUD.ini")
+				end
+
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 15)
+
+				imgui.SetCursorPosX(30)
+				imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(0.9, 0.9, 0.9, 1))
+				imgui.Text(u8("Tip Indicator:"))
+				imgui.PopStyleColor()
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 10)
+
+				imgui.SetCursorPosX((W - 30 - 340) / 2)
+				imgui.BeginGroup()
+					if satiety.state[0] == 0 then
+						imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(themes[current_theme[0]].button_active[1], themes[current_theme[0]].button_active[2], themes[current_theme[0]].button_active[3], 0.9))
+						imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(themes[current_theme[0]].button_hover[1], themes[current_theme[0]].button_hover[2], themes[current_theme[0]].button_hover[3], 1))
+						imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(themes[current_theme[0]].header[1], themes[current_theme[0]].header[2], themes[current_theme[0]].header[3], 1))
+					else
+						imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.25, 0.25, 0.25, 1))
+						imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.35, 0.35, 0.35, 1))
+						imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.20, 0.20, 0.20, 1))
+					end
+					if imgui.Button(u8(" STAMINA "), imgui.ImVec2(150, 40)) then
+						satiety.state[0] = 0
+						ini.main.satiety = false
+						inicfg.save(ini, "HassleHUD.ini")
+						sampAddChatMessage("{eb4034}Indicator 3 setat pe: {FFFFFF}Stamina", -1)
+					end
+					imgui.PopStyleColor()
+					imgui.PopStyleColor()
+					imgui.PopStyleColor()
+					imgui.SameLine()
+					imgui.SetCursorPosX(imgui.GetCursorPosX() + 40)
+					if satiety.state[0] == 1 then
+						imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(themes[current_theme[0]].button_active[1], themes[current_theme[0]].button_active[2], themes[current_theme[0]].button_active[3], 0.9))
+						imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(themes[current_theme[0]].button_hover[1], themes[current_theme[0]].button_hover[2], themes[current_theme[0]].button_hover[3], 1))
+						imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(themes[current_theme[0]].header[1], themes[current_theme[0]].header[2], themes[current_theme[0]].header[3], 1))
+					else
+						imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.25, 0.25, 0.25, 1))
+						imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.35, 0.35, 0.35, 1))
+						imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.20, 0.20, 0.20, 1))
+					end
+					if imgui.Button(u8(" SATURATIE "), imgui.ImVec2(150, 40)) then
+						satiety.state[0] = 1
+						ini.main.satiety = true
+						inicfg.save(ini, "HassleHUD.ini")
+						sampAddChatMessage("{eb4034}Indicator 3 setat pe: {FFFFFF}Saturatie", -1)
+					end
+					imgui.PopStyleColor()
+					imgui.PopStyleColor()
+					imgui.PopStyleColor()
+				imgui.EndGroup()
+
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 30)
+
+				-- BUTON TEME
+				imgui.SetCursorPosX((W - 30 - 300) / 2)
+				imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(themes[current_theme[0]].accent[1], themes[current_theme[0]].accent[2], themes[current_theme[0]].accent[3], themes[current_theme[0]].accent[4]))
+				imgui.SetCursorPosX((W - 30 - imgui.CalcTextSize(u8("=== TEME INTERFATA ===")).x) / 2)
+				imgui.Text(u8("=== TEME INTERFATA ==="))
+				imgui.PopStyleColor()
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 15)
+
+				imgui.SetCursorPosX((W - 30 - 300) / 2)
+				imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(themes[current_theme[0]].header[1], themes[current_theme[0]].header[2], themes[current_theme[0]].header[3], 0.9))
+				imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(themes[current_theme[0]].button_hover[1], themes[current_theme[0]].button_hover[2], themes[current_theme[0]].button_hover[3], 1))
+				if imgui.Button(u8(" Deschide Meniul Teme "), imgui.ImVec2(300, 45)) then
+					show_theme_menu[0] = true
+				end
+				imgui.PopStyleColor()
+				imgui.PopStyleColor()
+
+				imgui.SetCursorPosY(imgui.GetCursorPosY() + 10)
+				imgui.SetCursorPosX((W - 30 - 300) / 2)
+				imgui.TextColored(imgui.ImVec4(0.6, 0.6, 0.6, 1), u8("Tema actuala: ") .. themes[current_theme[0]].name)
+			imgui.EndChild()
+			imgui.PopStyleColor()
+		end
+
+		-- FOOTER
+		imgui.SetCursorPosY(imgui.GetCursorPosY() + 10)
+		imgui.SetCursorPosX((W - 180) / 2)
+		imgui.TextColored(imgui.ImVec4(0.5, 0.5, 0.5, 1), u8("HassleHUD v1.1 | allecsei"))
+
+		imgui.End()
+		imgui.PopFont()
+	end
+)
+
+-- ==================== FEREASTRA POP-UP TEME ====================
+local theme_popup_frame = imgui.OnFrame(
+	function() return show_theme_menu[0] end,
+	function(self)
+		imgui.PushFont(font_set)
+
+		local PW, PH = 520, 300
+
+		imgui.SetNextWindowSize(imgui.ImVec2(PW, PH), imgui.Cond.Once)
+		imgui.SetNextWindowPos(imgui.ImVec2((select(1, getScreenResolution()) - PW) / 2, (select(2, getScreenResolution()) - PH) / 2), imgui.Cond.Once)
+
+		imgui.Begin(u8("Meniul Teme"), show_theme_menu, imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse + imgui.WindowFlags.AlwaysAutoResize)
+
+		-- HEADER
+		imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(themes[current_theme[0]].header[1], themes[current_theme[0]].header[2], themes[current_theme[0]].header[3], 1))
+		imgui.BeginChild("##ThemeHeader", imgui.ImVec2(PW - 20, 50), false)
+			imgui.SetCursorPosX(15)
+			imgui.SetCursorPosY(15)
+			imgui.TextColored(imgui.ImVec4(1, 1, 1, 1), u8("ALEGE O TEMA"))
+		imgui.EndChild()
+		imgui.PopStyleColor()
+
+		imgui.SetCursorPosY(imgui.GetCursorPosY() + 10)
+
+		-- GRID TEME 3x3
+		local theme_grid = {
+			{ themes[0].name, themes[0].header, 0 },
+			{ themes[1].name, themes[1].header, 1 },
+			{ themes[2].name, themes[2].header, 2 },
+			{ themes[3].name, themes[3].header, 3 },
+			{ themes[4].name, themes[4].header, 4 },
+			{ themes[5].name, themes[5].header, 5 },
+			{ themes[6].name, themes[6].header, 6 },
+			{ themes[7].name, themes[7].header, 7 },
+			{ themes[8].name, themes[8].header, 8 },
+		}
+
+		local btnW, btnH = 150, 60
+		local startX = (PW - 20 - (btnW * 3 + 15)) / 2
+
+		for i, theme_data in ipairs(theme_grid) do
+			local isSelected = current_theme[0] == theme_data[3]
+			local col = (i - 1) % 3
+			local row = math.floor((i - 1) / 3)
+
+			if i == 1 then
+				imgui.SetCursorPosX(startX)
+			elseif col == 0 and i > 1 then
+				if row > 0 then imgui.SetCursorPosY(imgui.GetCursorPosY() + 10) end
+				imgui.SetCursorPosX(startX)
+			else
+				imgui.SameLine()
+			end
+
+			imgui.BeginGroup()
+				-- Color strip
+				imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(theme_data[2][1], theme_data[2][2], theme_data[2][3], 1))
+				imgui.BeginChild("##Strip" .. i, imgui.ImVec2(btnW, 15), false)
+				imgui.EndChild()
+				imgui.PopStyleColor()
+
+				-- Button
+				if isSelected then
+					imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(theme_data[2][1], theme_data[2][2], theme_data[2][3], 0.9))
+					imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(theme_data[2][1] + 0.15, theme_data[2][2] + 0.15, theme_data[2][3] + 0.15, 1))
+				else
+					imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.25, 0.25, 0.25, 1))
+					imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.35, 0.35, 0.35, 1))
+				end
+
+				if imgui.Button(theme_data[1], imgui.ImVec2(btnW, 40)) then
+					current_theme[0] = theme_data[3]
+					ini.main.theme = theme_data[3]
+					inicfg.save(ini, "HassleHUD.ini")
+					sampAddChatMessage("{eb4034}Tema schimbata in: {FFFFFF}" .. theme_data[1], -1)
+				end
+				imgui.PopStyleColor()
+				imgui.PopStyleColor()
+			imgui.EndGroup()
+		end
+
+		imgui.SetCursorPosY(imgui.GetCursorPosY() + 15)
+
+		-- CLOSE BUTTON
+		imgui.SetCursorPosX((PW - 20 - 150) / 2)
+		imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.5, 0.5, 0.5, 0.8))
+		imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.6, 0.6, 0.6, 1))
+		if imgui.Button(u8(" INCHIDE "), imgui.ImVec2(150, 35)) then
+			show_theme_menu[0] = false
+		end
+		imgui.PopStyleColor()
+		imgui.PopStyleColor()
+
+		imgui.End()
+		imgui.PopFont()
+	end
+)
+
+function getPlayerWanted()
+	return memory.getuint8(0x58DB60)
+end
+
+function getReserveOfBreath()
+    local float = memory.getfloat(0xB7CDE0)
+    return float / 39.97000244
+end
+
+function getReserveOfStamina()
+    local float = memory.getfloat(0xB7CDB4)
+    return float / 31.47000244
+end
+
+function getAmmoInClip()
+	local pointer = getCharPointer(PLAYER_PED)
+	local weapon = getCurrentCharWeapon(PLAYER_PED)
+	local slot = getWeapontypeSlot(weapon)
+	local offset = pointer + 0x5A0
+	local address = offset + slot * 0x1C
+	return memory.getuint32(address + 0x8)
+end
+
+function int_separator(int)
+	int = tostring(int)
+	if int ~= nil and string.len(int) > 3 then
+		local b, e = ("%d"):format(int):gsub("^%-", "")
+		local c = b:reverse():gsub("%d%d%d", "%1.")
+		local d = c:reverse():gsub("^%.", "")
+		return int:gsub(int, (e == 1 and "-" or "") .. d)
+	end
+	return int
+end
+
+function bringFloatTo(from, to, start_time, duration)
+    local timer = os.clock() - start_time
+    if timer >= 0.00 and timer <= duration then
+        local count = timer / (duration / 100)
+        return from + (count * (to - from) / 100), true
+    end
+    return (timer > duration) and to or from, false
+end
+
+function limit(v, min, max)
+	min, max = min or 0.0, max or 1.0
+	return v < min and min or (v > max and max or v)
+end
+
+function begin_edit_position(element)
+	while imgui.IsMouseDown(0) do wait(0) end
+	settings[0] = false
+	local current_x, current_y
+
+	if element == "hp" then
+		current_x, current_y = pos_hp_x[0], pos_hp_y[0]
+	elseif element == "armor" then
+		current_x, current_y = pos_armor_x[0], pos_armor_y[0]
+	elseif element == "satiety" then
+		current_x, current_y = pos_satiety_x[0], pos_satiety_y[0]
+	elseif element == "money" then
+		current_x, current_y = pos_money_x[0], pos_money_y[0]
+	elseif element == "ammo" then
+		current_x, current_y = pos_ammo_x[0], pos_ammo_y[0]
+	end
+
+	process_position = { ini.main.x, ini.main.y }
+	sampSetCursorMode(4)
+	sampAddChatMessage("{eb4034}HassleHUD{FFFFFF} - Mutati cursorul pentru a modifica " .. element .. ". ", -1)
+	sampAddChatMessage('{FFFFFF}CLICK STANGA{eb4034} pentru a salva, {FFFFFF}ESC{eb4034} pentru a anula!', -1)
+
+	local base_x, base_y = getCursorPos()
+
+	while process_position ~= nil do
+		local cursor_x, cursor_y = getCursorPos()
+		local offset_x = cursor_x - base_x
+		local offset_y = cursor_y - base_y
+
+		if element == "hp" then
+			pos_hp_x[0] = current_x + offset_x
+			pos_hp_y[0] = current_y + offset_y
+		elseif element == "armor" then
+			pos_armor_x[0] = current_x + offset_x
+			pos_armor_y[0] = current_y + offset_y
+		elseif element == "satiety" then
+			pos_satiety_x[0] = current_x + offset_x
+			pos_satiety_y[0] = current_y + offset_y
+		elseif element == "money" then
+			pos_money_x[0] = current_x + offset_x
+			pos_money_y[0] = current_y + offset_y
+		elseif element == "ammo" then
+			pos_ammo_x[0] = current_x + offset_x
+			pos_ammo_y[0] = current_y + offset_y
+		end
+		wait(0)
+	end
+	sampSetCursorMode(0)
+	edit_mode[0] = 0
+end
+
+function begin_change_position()
+	while imgui.IsMouseDown(0) do wait(0) end
+	settings[0] = false
+    process_position = { ini.main.x, ini.main.y }
+    sampSetCursorMode(4)
+    sampAddChatMessage("{eb4034}Made by allecsei {FFFFFF} - Mutati cursorul in pozitia dorita, iar {FFFFFF}ESC{eb4034} pentru a anula",-1)
+    while process_position ~= nil do
+        local x, y = getCursorPos()
+        ini.main.x = x
+        ini.main.y = y
+        wait(0)
+    end
+    sampSetCursorMode(0)
+    settings[0] = true
+end
+
+function onWindowMessage(msg, wp, lp)
+	if process_position then
+		if msg == 0x0201 then
+			if edit_mode[0] ~= 0 then
+				local element
+				if edit_mode[0] == 1 then element = "hp"
+				elseif edit_mode[0] == 2 then element = "armor"
+				elseif edit_mode[0] == 3 then element = "satiety"
+				elseif edit_mode[0] == 4 then element = "money"
+				elseif edit_mode[0] == 5 then element = "ammo"
+				end
+
+				if element == "hp" then
+					ini.position.hp_x = pos_hp_x[0]
+					ini.position.hp_y = pos_hp_y[0]
+				elseif element == "armor" then
+					ini.position.armor_x = pos_armor_x[0]
+					ini.position.armor_y = pos_armor_y[0]
+				elseif element == "satiety" then
+					ini.position.satiety_x = pos_satiety_x[0]
+					ini.position.satiety_y = pos_satiety_y[0]
+				elseif element == "money" then
+					ini.position.money_x = pos_money_x[0]
+					ini.position.money_y = pos_money_y[0]
+				elseif element == "ammo" then
+					ini.position.ammo_x = pos_ammo_x[0]
+					ini.position.ammo_y = pos_ammo_y[0]
+				end
+
+				inicfg.save(ini, "HassleHUD.ini")
+				sampAddChatMessage("{eb4034}Pozitia pentru " .. element .. " a fost salvata!", -1)
+				process_position = nil; consumeWindowMessage()
+			else
+				inicfg.save(ini, "HassleHUD.ini")
+				sampAddChatMessage("{eb4034}Pozitia a fost salvata!", -1)
+				process_position = nil; consumeWindowMessage()
+			end
+		elseif msg == 0x0100 and wp == 0x1B then
+			if edit_mode[0] ~= 0 then
+				local element
+				if edit_mode[0] == 1 then element = "hp"
+				elseif edit_mode[0] == 2 then element = "armor"
+				elseif edit_mode[0] == 3 then element = "satiety"
+				elseif edit_mode[0] == 4 then element = "money"
+				elseif edit_mode[0] == 5 then element = "ammo"
+				end
+
+				if element == "hp" then
+					pos_hp_x[0] = ini.position.hp_x
+					pos_hp_y[0] = ini.position.hp_y
+				elseif element == "armor" then
+					pos_armor_x[0] = ini.position.armor_x
+					pos_armor_y[0] = ini.position.armor_y
+				elseif element == "satiety" then
+					pos_satiety_x[0] = ini.position.satiety_x
+					pos_satiety_y[0] = ini.position.satiety_y
+				elseif element == "money" then
+					pos_money_x[0] = ini.position.money_x
+					pos_money_y[0] = ini.position.money_y
+				elseif element == "ammo" then
+					pos_ammo_x[0] = ini.position.ammo_x
+					pos_ammo_y[0] = ini.position.ammo_y
+				end
+
+				sampAddChatMessage("{eb4034}Nu s-au salvat modificarile pentru " .. element, -1)
+				process_position = nil; consumeWindowMessage()
+			else
+				ini.main.x = process_position[1]
+				ini.main.y = process_position[2]
+				sampAddChatMessage("{eb4034}Nu s-au salvat modificarile pozitiei", -1)
+				process_position = nil; consumeWindowMessage()
+			end
+		end
+	else
+		-- Cand nu suntem in modul de editare pozitie, ESC inchide meniurile pe rand
+		if msg == 0x0100 and wp == 0x1B then
+			-- Mai intai inchide meniul de teme (popup), apoi meniul principal
+			if show_theme_menu[0] then
+				show_theme_menu[0] = false
+				consumeWindowMessage()
+			elseif settings[0] then
+				settings[0] = false
+				consumeWindowMessage()
+			end
+		end
+	end
+end
+
+function onScriptTerminate(script, bool_quit)
+	if script == thisScript() and orig_hud[0] == false then
+		displayHud(true)
+	end
+	-- Curatam memoria radar
+	radar_freeOne(rpx)
+	radar_freeOne(rpy)
+	radar_freeOne(rph)
+	radar_freeOne(rpw)
+end
+
+icons85 = {
+	hungry = "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A\x00\x00\x00\x0D\x49\x48\x44\x52\x00\x00\x00\x30\x00\x00\x00\x30\x08\x06\x00\x00\x00\x57\x02\xF9\x87\x00\x00\x00\x09\x70\x48\x59\x73\x00\x00\x02\x76\x00\x00\x02\x76\x01\xDA\x60\xE3\x4F\x00\x00\x00\x19\x74\x45\x58\x74\x53\x6F\x66\x74\x77\x61\x72\x65\x00\x77\x77\x77\x2E\x69\x6E\x6B\x73\x63\x61\x70\x65\x2E\x6F\x72\x67\x9B\xEE\x3C\x1A\x00\x00\x03\x05\x49\x44\x41\x54\x68\x81\xED\x98\x4D\x48\x15\x51\x18\x86\xBF\xD1\xFC\x41\xEC\x77\xE1\x22\x73\x53\x52\x90\x51\x44\x3F\xD0\x2A\x0C\x6A\xD1\xA2\xCC\x08\x77\x25\x14\x45\x42\x46\x10\xD5\xF2\x6E\xD2\xB6\x41\xAB\xDA\x45\x8B\x88\x36\x2E\xAC\x65\x0B\x49\xFA\xC1\x08\x22\x22\x31\xA8\x4C\x09\xDA\xA5\x49\x75\xCD\xA7\xC5\x9C\x5B\xC7\xEF\x9E\x99\x3B\x7A\xCF\xBD\x63\x74\x5F\x70\x31\xCE\x99\xF7\x7D\xBE\x33\xDF\x9C\x39\x73\x45\x2A\xAA\xA8\xA2\x7F\x5A\x41\xB9\x82\x80\x26\x11\x39\x2C\x22\x87\x44\xA4\x55\x44\x5A\xCC\xA9\x71\x11\x19\x13\x91\x01\x11\x19\x08\x82\xE0\x4B\xB9\x98\x12\x09\x68\x04\x32\xC0\x0C\x85\xF5\x03\xB8\x0E\xAC\x4A\x9B\x5B\x44\x44\x80\xDD\xC0\x44\x02\x70\xAD\x09\x60\x57\xDA\xF0\x9D\x09\x67\x3D\x4A\x33\x40\x47\x5A\xF0\xFB\x4D\x3B\x68\xBD\x07\x2E\x03\x5B\x09\x5B\xAB\x11\xD8\x06\x5C\x01\x3E\x44\x14\xB1\xB3\xDC\xF0\xDB\x81\x29\x05\x32\x07\x5C\x05\xEA\x63\xAE\xAB\x07\xFA\xCC\x58\x5B\x9F\x28\xD7\x33\x01\x2C\x07\x46\x15\xC0\x2F\xE0\xF8\x02\x3C\xBA\x1D\x45\xF4\x97\x92\xDB\x0E\xBF\xED\x68\x83\x0B\x8B\xF0\xE9\x77\xB4\x52\x53\x29\x98\xED\xD0\x76\x07\xFC\x8D\x45\x7A\xD5\x13\x3E\x2F\xB6\x4E\xF9\x66\xB6\x03\xAB\x81\x57\x2A\xF0\x35\x31\x3D\x9F\xC0\xF3\x92\xF2\x1B\xF0\xC9\xAC\xC3\x8E\x3A\xFA\x7E\x47\x91\x9E\x6D\xCA\x73\xD4\x17\xAF\x2B\xEC\xB1\x0A\xBB\xE3\xC1\xB3\x41\x79\x4E\xFB\x60\x75\x05\x6D\x50\x41\xB3\x40\xAB\x07\xDF\x44\x05\x54\x15\x1B\x24\x22\x47\xD4\xF1\xA3\x20\x08\xC6\x3C\xF8\xAE\x57\xC7\x93\xAE\x41\x3E\x0A\xD8\xAB\x8E\xEF\x7A\xF0\x14\x11\x39\xA8\x8E\xDF\x78\xF2\x9D\x2F\xF2\x97\xBB\x4D\x1E\x3C\x5D\xCB\xE8\x49\x1F\xBC\xAE\xB0\x59\x2B\xE4\x3B\x50\xED\xC1\xF3\x9A\x82\xFF\x46\x29\x5E\x64\x40\x8D\x0A\xFA\xEA\xC1\xF3\x04\xF9\x5B\x89\x3E\x1F\xBC\xAE\xB0\x2A\x33\xEB\xF6\x0A\xB4\xAC\x08\xBF\x8B\x0E\xF8\x71\x60\xA5\x4F\x6E\x1D\xFA\x56\x05\xEA\x87\x3A\x89\x47\x03\x70\x93\x7C\xCD\x50\xE4\x0B\xB1\x50\x70\x17\x90\x55\xA1\x0B\x5A\x85\x80\x3D\x8E\x49\x80\xF0\x7B\xA2\xB3\x54\xEC\x51\xF0\x39\xF5\x24\xB8\x7E\x33\x70\xDF\xD1\x32\x10\x7E\x4F\x1C\x48\x0B\x3E\xA7\x7B\xC0\x3E\xA0\xC6\x5C\x53\x4B\xF8\xF5\x75\x16\x18\x8A\x00\xC7\xDC\x8D\x36\x1F\x90\x75\x40\x2F\xF0\x04\x98\x2E\x00\x9B\x2D\x50\xD0\x4F\xF3\x17\xA7\x39\xE0\x16\xB0\xC2\x07\x7C\x33\xF0\xB2\x40\xA0\x0D\xDF\x45\xB2\xBB\x12\xA5\x17\x40\x7B\xD1\xE0\x06\xBE\x6E\xA1\xF0\xE6\xBA\xC5\x14\x30\x04\x1C\x03\x7C\x6C\x69\xFE\x14\xD0\x9B\x30\xFC\x23\xE6\x67\x8F\x08\xF8\x2C\xF0\x8E\xF9\xBD\x3E\x09\x3C\x20\xFC\x58\xD9\xE8\x0D\x5A\x15\xF0\x54\x81\x0C\x02\xEB\x62\xC6\x77\x44\xC0\xE7\xEE\x4C\x35\xB0\x1A\x0F\x5B\x8C\xA4\x05\xE8\x9F\x44\x22\xE1\xCD\xF8\xF1\x28\xF8\x54\x44\xB8\x71\xB2\xD5\x6C\xFE\xEF\x5C\xDA\x1C\xAD\x95\x1E\xBC\x01\x7A\xE6\x68\xA1\xD3\x66\x66\x33\x8E\xF1\xF3\x94\x02\x72\x1E\xD0\x79\xC7\xAC\xDA\xCA\xA8\xF1\x4B\xAE\x80\x3A\x60\x24\xA6\x80\x2C\xB0\xC5\x1A\xBF\xB4\x0A\x10\x11\x01\xD6\x00\xCF\x23\x0A\x38\x63\x8D\x6B\x51\xE7\x8A\xFE\x1E\xF0\x26\xC2\xBD\xCB\x39\xE0\xB3\x82\x1C\x24\x7C\x53\xB7\x00\x0F\xD5\xB9\xE1\xB4\xB9\xF3\x44\xF2\x17\x1B\x24\xD8\x85\x96\x5D\xE6\x4E\x44\xB5\x93\xAD\x11\xA0\x36\x6D\x5E\xA7\x88\x7F\x26\x72\xF0\x6B\xD3\xE6\x8C\x15\xE1\x96\xA0\x9B\xBF\xDB\xEB\x29\x60\x18\xE8\x59\xB2\x33\x5F\x51\x45\xFF\x81\x7E\x03\xAB\xB3\x0E\x45\xD4\x46\x0A\x43\x00\x00\x00\x00\x49\x45\x4E\x44\xAE\x42\x60\x82",
+	heart = "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A\x00\x00\x00\x0D\x49\x48\x44\x52\x00\x00\x00\x30\x00\x00\x00\x30\x08\x06\x00\x00\x00\x57\x02\xF9\x87\x00\x00\x00\x09\x70\x48\x59\x73\x00\x00\x02\x76\x00\x00\x02\x76\x01\xDA\x60\xE3\x4F\x00\x00\x00\x19\x74\x45\x58\x74\x53\x6F\x66\x74\x77\x61\x72\x65\x00\x77\x77\x77\x2E\x69\x6E\x6B\x73\x63\x61\x70\x65\x2E\x6F\x72\x67\x9B\xEE\x3C\x1A\x00\x00\x03\x1B\x49\x44\x41\x54\x68\x81\xED\x98\x5F\x68\x4E\x71\x18\xC7\xBF\x3F\x63\x43\x61\xA4\x36\x12\x92\x22\x8A\x12\x91\x7F\xE1\x06\x43\xB2\xD6\x84\x1B\x2E\x44\xC9\x1D\x2D\x2E\x57\x6A\x51\xE2\x02\x77\x5C\x28\x24\x17\x2C\x6B\x97\xB8\x90\xF2\x6F\xB5\xB5\xE5\x62\x69\x51\x36\x5B\xDB\xD8\xAC\x66\xFF\x3E\x2E\xDE\xF3\xD6\xF1\x7B\xCF\x39\xEF\x79\xCF\x7B\xDE\x59\x39\x9F\x3A\x37\xE7\x7D\x9E\xEF\xF3\x7D\xCE\x79\xCE\x39\xBF\xF7\x27\x25\x24\x24\x24\x24\xFC\xCF\x98\x5C\x82\x81\x65\x92\x2A\x24\x6D\x91\xB4\x42\xD2\x2C\x49\xFD\x92\xDA\x25\xBD\x94\xD4\x68\x8C\x19\xB0\x72\x66\x4A\x3A\x28\x69\xB3\xA4\x35\x92\x8A\x25\x8D\x39\x39\x1F\x24\x3D\x33\xC6\xF4\xE7\xD5\x45\x08\xE3\x6B\x80\xA7\xC0\x38\xC1\x0C\x00\xD7\x81\x52\x60\x0E\x70\x15\xF8\x91\x25\x67\x18\xB8\x0F\x2C\x2D\x84\x71\x03\x5C\x06\x46\xB2\x98\xB0\xE9\x04\xBE\xE5\x98\x33\x04\x9C\x8E\xDB\xFC\xDD\x1C\x4D\xC4\x41\x5D\x2E\x3E\xA7\x07\xFC\x76\x45\xD2\x29\x8F\xF3\x4D\x92\x1E\x4B\x6A\x56\x6A\xFE\xCB\x25\x6D\x97\x74\x4C\xD2\x22\x1F\xAD\x3E\x49\x4F\x25\xBD\x96\xD4\x23\x69\x9E\xA4\x75\x92\x8E\x48\x5A\x69\xC5\xD6\x00\xBD\xC6\x98\x6B\x21\x7B\xC8\x04\xD8\x49\xE6\xBC\xF7\x01\x55\x80\xE7\x83\x0F\xCC\x02\x6A\xAD\xBC\x09\xA0\x0E\x98\xEB\x93\x53\x04\x9C\x04\x7E\x5A\xB5\x46\x81\x8D\x51\xCD\x1B\xE0\xAD\x25\xD8\x0D\xAC\x0A\x99\x5F\x01\xB4\x01\xAD\x40\x45\xC8\x9C\xD5\x40\xAF\x55\xF3\x66\xD4\x06\xB6\x7B\xCC\xE5\xEE\x48\x62\xB9\xD5\xDD\x0F\x8C\xB9\x6A\x9E\x89\x2A\x74\xC3\x32\x5F\x1F\xB3\xD7\xA0\xDA\x07\x80\x87\xC0\x39\xBF\x51\x0D\x23\x62\x8F\x4F\x55\x0C\xA6\xBE\x02\x5D\xC0\xD1\x7C\xB4\xC2\x16\xB4\x67\x71\x71\x1E\x5A\x95\xFC\xFD\x0D\x19\x0D\xFB\x5C\x44\x86\xCC\x8F\xD6\x8C\x88\x3A\xB6\xF9\x34\x83\xC0\x86\xB8\xFC\x66\xCC\x19\xD0\x25\xA9\xCC\x75\xAA\xCC\x18\xD3\x9D\x8B\x28\x50\x29\xE9\x91\x24\xBF\xE6\x3B\x25\x6D\x35\xC6\x74\x78\xE4\x2E\x94\xB4\xCC\x23\xE7\x8B\x31\xA6\x27\x4C\xF1\x8F\xD6\x15\xDB\x97\x25\xFE\x30\xD0\xE1\x71\xA5\xDD\x0C\x03\xBF\xAD\x73\x6D\xC0\x7C\x4B\xAB\x86\xBF\xDF\x44\x6E\x26\x80\x0B\x61\x1A\xB0\xDF\x42\xF7\xB2\xC4\x67\x5B\xF3\x8C\x38\x4D\x9E\x70\x4C\xB8\x79\x05\x94\x38\x3A\x17\xB3\xE8\x00\x64\x5F\xB5\x02\x7B\xAC\xA4\x51\x60\x6D\x40\xFC\xF7\x80\x82\x63\xB8\xDE\x3C\xC0\x25\x8F\x98\x47\xC0\x79\x8F\xE6\xBC\x68\x0B\xD3\xC0\x34\xA0\xC9\x4A\xFC\x84\x75\xBB\x5D\xF1\xD5\xA4\xBE\xD4\x36\x9D\x40\xB5\x47\xFC\x9D\x10\x46\x7F\x01\xEF\xAD\xA3\x91\xB0\x0F\x3F\xB0\xD7\x43\xF4\x1D\x50\x1A\x4A\x20\x58\x7B\x3A\xF0\x3C\xC0\xFC\x00\xB0\x2D\xDF\x3A\x22\xF5\xC7\xC4\xE6\x23\xB0\x20\x06\xED\xD9\xC0\x1B\x0F\xFD\x21\x60\x57\xDE\xE6\x9D\x22\x45\x40\x7D\x01\xEF\x44\x19\xF0\xD9\xA5\x3B\x08\xEC\x88\xC3\xBB\xBB\x48\x09\xD0\x50\xC0\x26\x96\x03\x4F\x48\xCD\xF7\xA6\x38\x3C\x7B\x15\x29\x06\x9E\x15\x6A\x9C\x26\x85\x38\xEF\x04\x50\x0E\x14\x15\xCA\x6B\x50\xE1\xBC\x9A\x20\xB5\x53\xF1\xC2\xC9\x69\x07\x96\x4C\x86\x6F\xDB\x44\xA4\x26\x1C\xF3\xEF\xAC\x9C\xDA\xC9\xF4\xEE\x36\x93\x53\x13\x3E\xE6\x01\xCE\xFE\x0B\xFF\x69\x53\xA1\x9A\x08\x30\xDF\x40\xC4\x65\x7A\x6C\x04\x34\xD1\x02\x1C\x72\x8E\x16\x1F\xF3\x25\xFF\xD4\x7C\x1A\xFC\x5F\xB1\x7E\x34\x92\xDA\x2B\x9D\x3A\xE4\xD0\xC4\xD4\x33\x9F\xC6\x69\xE2\x36\xDE\x4B\xE2\x71\xE0\x16\x50\x5C\x88\xDA\xD1\xB6\x2E\x7C\x00\xD6\x4B\x3A\xAE\xD4\x36\xBA\x24\xB5\x4A\x7A\x60\x8C\x69\x8E\xB3\x4E\x42\x42\x42\x42\x42\x42\x9A\x3F\xE2\x80\x6D\xD6\x1B\xDF\x0B\x0F\x00\x00\x00\x00\x49\x45\x4E\x44\xAE\x42\x60\x82",
+	stamina = "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A\x00\x00\x00\x0D\x49\x48\x44\x52\x00\x00\x00\x30\x00\x00\x00\x30\x08\x06\x00\x00\x00\x57\x02\xF9\x87\x00\x00\x00\x09\x70\x48\x59\x73\x00\x00\x02\x76\x00\x00\x02\x76\x01\xDA\x60\xE3\x4F\x00\x00\x00\x19\x74\x45\x58\x74\x53\x6F\x66\x74\x77\x61\x72\x65\x00\x77\x77\x77\x2E\x69\x6E\x6B\x73\x63\x61\x70\x65\x2E\x6F\x72\x67\x9B\xEE\x3C\x1A\x00\x00\x04\x5E\x49\x44\x41\x54\x68\x81\xED\x98\x6F\x68\x56\x55\x1C\xC7\xBF\xC7\x36\x1D\xCD\x6C\xA8\xB5\x5C\xCD\xD2\xA0\xE6\x20\xCC\x5E\x94\xAC\x91\xC8\x0A\xCC\x89\x46\x94\x8D\x98\x88\x10\x95\xE9\xAB\x7A\x95\x4A\x81\x10\x8D\x1A\x95\xA5\xBE\x89\xE8\x45\xA5\xFD\x01\x21\x08\x0A\x8A\x4A\xA9\x2C\x23\xA5\x54\x24\x22\xCA\x59\xC9\xB4\x36\x37\xF3\xCF\xD6\x7C\x3E\xBD\xB8\xF7\x91\xF3\x9C\xE7\xDE\xFB\xDC\xFB\xDC\xFB\xEC\x79\xE1\xBE\x30\xB8\x3B\xE7\x7C\xBF\xBF\xEF\xEF\x9E\xFB\x9C\xF3\x3B\x47\x9A\xC0\x04\x2E\x6D\x98\x4A\x8A\x03\x4D\x92\xEA\xFC\x7F\x87\x8D\x31\x7F\x57\x32\x5E\x6A\x00\x33\x81\x75\xC0\xE7\xC0\x00\xC5\x38\x0E\x7C\x0A\xBC\x00\xDC\x52\x6D\xBF\x17\x01\x34\x00\x3D\xC0\xD9\x00\xD3\x61\xC8\x01\xEB\xAB\xED\x5D\x40\x3B\xD0\x97\xC0\xB8\x8D\x31\x60\x6E\x35\xCD\xAF\x04\x46\x1D\x53\x43\xC0\x9B\xC0\xFD\xC0\x4D\xC0\x0C\xA0\x0E\x98\x03\xDC\x07\xEC\x75\xC6\x77\x55\xCB\xFC\x52\xFF\x0D\xDA\x9F\xC4\x36\xE0\xAA\x90\xF1\xED\xC0\x27\x8E\xF9\x73\xE3\x3A\x03\xC0\x0D\xC0\x7A\xE0\x75\xFF\x4D\xE7\xF1\x2F\xB0\x22\x84\xB3\x00\xD8\x17\xF0\xF9\x8C\x00\xAB\xC6\xCB\xF8\x0C\xE0\x1D\xE7\x8D\xE7\x31\x0A\x74\x44\x70\xBF\x0A\xE0\x00\xF4\x02\x93\xC6\xC3\xFC\x8D\x44\xFF\x48\x9F\x2A\xC1\x7F\x37\x82\xBB\x1F\x58\x50\x49\xF3\x53\x81\x5F\x9D\xA0\x7F\xE2\x7D\x42\x1B\x80\x25\x31\x34\xEA\x81\xB5\xC0\x4E\x82\xF7\x86\x11\x60\x65\xA5\x12\xE8\x75\x82\x3D\x0F\xD4\xA6\xD0\x9B\x0C\xAC\xA0\x78\x25\x1A\x03\xDA\xB3\xF4\x9E\x7F\x73\xC3\x56\x90\x6D\xC0\x35\xC0\x01\xE0\x77\x60\x51\x4A\xFD\x07\x29\x5C\x08\x0E\x03\x89\x4B\x9B\x9A\x88\xBE\x0E\x49\x57\xF8\xCF\xE7\x24\x6D\x92\xD4\x2D\xE9\x56\xBF\x6D\x9D\xA4\xDD\x8E\xA9\x26\x49\xAB\x25\x8D\x49\x1A\xF0\xFF\x4E\xFB\xDD\x43\x92\x26\xF9\x9A\x57\x4A\x6A\x92\x74\x48\x52\x9B\xDF\xDF\x2A\xA9\x59\x52\x5F\x56\x09\xB4\x5A\xCF\xDF\x19\x63\x06\x81\x2F\x7D\x43\x53\x25\x7D\x1C\xC0\xD9\x25\xE9\x8E\x24\x06\x2C\x9C\x92\x74\x22\x29\x29\x2A\x81\x29\x8E\xB8\x8C\x31\x07\x81\xEB\x25\x4D\x33\xC6\x1C\x0D\xE0\x4C\x4B\x6A\xC0\xC7\x80\xA4\x2E\x63\xCC\xF9\xA4\xC4\xA8\x04\xFE\xB1\x9E\x5B\xF2\x0F\xC6\x98\x41\x49\x83\x21\x9C\x6E\x49\x1B\x24\x2D\x92\x34\x33\x64\x4C\x4E\x52\xBF\xA4\xE3\x92\x7E\x94\xB4\x47\xD2\x07\xC6\x98\x33\x31\x3D\xC7\x03\xDE\x0E\x6A\xA3\x33\x01\xD7\x00\x8B\x81\x1D\x14\x6F\x7E\xA3\xC0\xDA\x4C\xCD\x46\x98\xD8\xEF\xAC\xD7\x2F\x02\x0D\x09\x75\xE6\x01\x1F\x06\xAC\xFF\x5B\xCB\x59\x75\x12\x01\xB8\x93\xE2\x6A\xB3\x0F\x98\x55\x86\xD6\x6A\xE0\x94\xA3\xF5\x5A\x25\x7C\xBB\x81\x97\x3B\xFB\x01\xC0\xB3\x65\x6A\xB5\x50\x5C\x96\x6C\xCE\xDA\x73\x50\xE0\x46\x60\x8F\x15\xF4\x8D\x14\x5A\xB3\x81\x23\x96\xD6\x05\xE0\xDE\x2C\xFD\x86\x05\xDE\x62\x05\x7D\x2F\xA5\x56\x33\x70\xC2\xD2\x3B\x09\x5C\x9B\x95\xD7\xA0\x80\x8F\x02\xE7\xAD\x80\x6F\xC7\xE4\x19\xBC\x83\xCF\x76\xE0\x7D\x60\x33\xD0\xEC\xF7\x75\x50\xB8\x42\xED\xAC\x94\xF9\x4E\xBC\xD3\x96\x8D\x65\x31\x78\xD3\x81\xCF\x28\xC6\x08\xB0\xDC\x1F\xB3\xD1\x6A\xCF\x01\x6D\xA5\x74\xCB\x49\xE0\xB0\x15\x64\x18\x78\x38\x06\x67\x32\xF0\x7D\x80\xF9\x3C\xDE\xF2\xC7\xD5\x02\x07\xAD\xF6\x03\x40\x17\x59\x5D\xB9\x00\x73\x9D\xC0\xF7\xC4\xE4\x3D\xED\xF0\xF6\x01\x2F\x01\x7F\xE0\x55\xA0\x8B\xAD\xB1\x4B\x42\x92\xDC\x0B\xCC\x4B\x9B\xC0\x42\x4B\xF0\x02\x50\x63\xF5\x4D\x01\xEA\x42\x78\xF6\x21\x68\x97\xC3\x2B\x3A\x4F\x00\xDF\x86\x24\x71\x12\x68\x71\xC7\x27\x49\x60\x96\x23\xF8\x88\xDF\xBE\x0C\x38\x8D\xB7\x31\xB5\x39\x9C\x06\x87\x33\x3F\x46\x9C\xDB\x80\x5F\x80\xDF\x80\x63\x0E\xFF\x6B\xD2\xEC\xD8\xC0\x6E\x47\xF0\x10\x85\xAB\x47\x3F\xFE\xCA\x12\x92\x40\x6B\x94\x7E\x48\x4C\xF7\x13\xBC\x3D\x4D\x02\xF3\xF1\xAE\x4D\xA2\xF0\x13\xD0\x68\x71\xFE\xB2\xFA\x9E\x2C\x23\xA6\x01\x7E\xB6\x34\x22\x2F\x0E\xE2\x08\xB6\x51\x7C\xB8\x77\xCB\x8B\x23\xC0\x13\xC0\x47\xC0\x19\xAB\xFD\x18\x50\x5F\x46\x4C\xFB\x12\x2C\x7D\xB9\x01\xD4\x00\x77\xE3\x6D\x6A\x9D\x78\xD7\x85\xAF\x96\x98\x99\xB2\x66\x01\xB8\x8E\xC2\xF3\xF2\x9A\xD4\x09\x84\x04\x32\xC0\x2B\x31\x12\x08\xAC\xFF\x81\x87\xF0\x6A\xAC\x1F\x80\x4D\xC0\x5D\xC0\x1A\x0A\x67\xFB\x2C\x70\x75\x45\x12\xF0\x4D\x34\x39\x66\x77\x00\xAB\x80\x6E\xE0\x19\xE0\x71\xE0\xB2\x00\x5E\x4F\xCC\xD9\xDB\x58\x31\xF3\xBE\x11\x7B\xAF\xF8\x8F\x18\xD7\x85\x78\x17\xBD\x71\xB0\x85\x12\x4B\x68\xD4\x99\x38\x2E\xFA\x1D\xBD\x1E\x60\xBB\xBC\x6B\x14\x1B\xD3\x25\xCD\x91\xB4\x50\xD2\x63\x56\xFB\x51\x79\xB7\x19\x4B\x25\xCD\xF6\x79\xDF\x48\xDA\x6A\x8C\xF9\x22\x03\x7F\xA5\x41\xF8\x4E\x1A\x07\x0F\x8C\x8B\xC9\x12\x09\xDC\x4C\xE1\xDA\x1F\x07\x39\xE0\xB9\x6A\x7B\xBF\x08\xBC\xF2\xF9\x65\xBC\xFA\x25\x0C\xA3\x78\x45\x5A\x2F\x31\x4A\x8C\x38\xC8\xFC\x56\x00\xEF\x47\xD7\x28\xE9\x72\x49\xF5\x92\x6A\xE5\x5D\x8C\x0D\x4A\x1A\x32\xC6\xE4\xB2\x8E\x39\x81\x09\x5C\xCA\xF8\x1F\x8E\x91\x65\x7A\x13\x25\x23\x39\x00\x00\x00\x00\x49\x45\x4E\x44\xAE\x42\x60\x82",
+	shield = "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A\x00\x00\x00\x0D\x49\x48\x44\x52\x00\x00\x00\x30\x00\x00\x00\x30\x08\x06\x00\x00\x00\x57\x02\xF9\x87\x00\x00\x00\x09\x70\x48\x59\x73\x00\x00\x02\x76\x00\x00\x02\x76\x01\xDA\x60\xE3\x4F\x00\x00\x00\x19\x74\x45\x58\x74\x53\x6F\x66\x74\x77\x61\x72\x65\x00\x77\x77\x77\x2E\x69\x6E\x6B\x73\x63\x61\x70\x65\x2E\x6F\x72\x67\x9B\xEE\x3C\x1A\x00\x00\x02\xAA\x49\x44\x41\x54\x68\x81\xED\x99\xCD\x4B\x15\x51\x18\xC6\x9F\x73\xD3\x52\xA1\x0C\x8D\x82\x92\x36\x7E\xB4\xE8\x63\xD1\x4E\xFA\x94\xA0\x55\x81\xCB\xA0\x16\x2A\xB4\xC8\xFA\x23\x5A\x14\xAD\x43\x97\x7D\x10\x24\x11\xD4\xA2\x45\x04\x41\x04\xB5\x34\x37\xB5\x8B\xAE\xC2\x05\x37\x49\xA4\x69\x69\xA1\xF7\xD7\x62\x46\x1A\x8F\x33\x77\xCE\xCC\x1D\x1D\x89\xF9\xC1\x85\x39\x77\xE6\x7D\xDE\xE7\x99\x39\x77\x2E\x73\x46\x2A\x28\x28\xC8\x1C\xA0\x04\x0C\x03\xD3\xFE\x67\x18\x28\xE5\xED\x2B\x16\xC0\x00\x17\x81\x09\xD6\xF3\x01\xB8\x00\x98\x3C\x8C\xB5\x00\x6D\x11\xFB\x9A\x81\xD3\xC0\x6D\x60\x32\xC4\xB8\x4D\x19\xB8\x05\x9C\x02\x9A\x22\x34\xDB\x80\x16\x17\x6F\xB1\x67\x03\xB8\x2A\x69\x44\xD2\x0E\x49\xDF\x25\x4D\x4B\x5A\xF2\x6B\xF7\x49\xDA\x2F\x29\xED\xF4\xA8\xFA\x7A\x5F\x25\x21\xA9\x49\x52\x87\xA4\xDD\x92\x7E\x4B\xBA\x61\x8C\xB9\x57\x6F\x80\x19\x49\x7B\x52\x98\x5B\x96\x34\xE6\x6F\x5F\x96\xD4\x90\x42\x63\xC6\x18\xB3\x37\x45\xDD\x3F\x1C\xA6\x84\xCD\x02\x70\x1F\xE8\x0C\x68\x74\x01\x0F\x80\x9F\x49\xC5\xE2\xFC\xB9\x5C\x81\x38\x91\x25\x49\x9F\x25\x4D\x48\x7A\x21\xE9\xB5\x31\x66\x31\x42\xAB\x59\xD2\x79\x49\xFD\x92\x8E\x4B\xEA\x91\x37\x6D\xA2\x0D\x1A\x53\xD3\x63\x9A\x00\x9D\xF2\xE6\xA8\x91\xF4\x4D\x52\xC5\x18\x53\x8D\xD3\x89\xD0\x2E\x49\x3A\x28\xA9\x5D\xDE\x6F\x60\x56\x52\x79\x8D\xC1\xAC\x03\xC4\x09\xD6\x4B\xD2\x7E\x5B\xFF\xCF\x25\x86\x22\x40\xDE\x14\x01\xF2\xA6\x08\x90\x37\x45\x80\xBC\x29\x02\xE4\x8D\x4B\x80\x5F\xC1\x81\xEB\x93\x52\x1A\x80\x9D\xD6\x57\xF3\x71\x35\x2E\x01\xE6\xAC\x71\x9A\x87\x1B\x57\x6C\xED\x1F\x71\x05\x2E\x01\xA6\xAC\xF1\x61\x67\x3B\xC9\x39\x62\x8D\xCB\xA1\x47\x05\x70\x09\xF0\xD1\x1A\x9F\x70\xB6\x93\x1C\x5B\xFB\x53\x5C\x81\x4B\x80\xF7\xD6\xB8\xDF\xD9\x4E\x72\x6C\xED\x77\x75\x2B\x02\xAD\xC0\x1F\xEB\x51\xF5\x4C\xDD\xC2\xEB\xFB\x9C\xB3\x7A\x2C\x01\xBB\xB2\x12\x7F\x6E\x89\xBF\xC9\x44\x78\x6D\x8F\xB7\x56\x8F\xA7\x59\x8A\x9F\x0C\x59\x30\xB8\x94\xA1\xFE\x95\x10\xFD\xDE\xAC\xF4\x57\x9B\xBC\xB2\x1A\xCC\x02\x5D\x19\xE8\x76\x03\x73\x96\xF6\xCB\x2C\x3C\xDB\x8D\x0E\xF9\xF3\x32\xC8\x17\xE0\x40\x1D\x9A\x1D\x78\x4B\x8D\x41\x16\x81\xEE\x2C\xBD\x07\x1B\x5E\x0F\xB9\xD4\x93\xC0\xD1\x14\x5A\xC7\x80\xA9\x10\xBD\x6B\x1B\xE1\x3D\xD8\xF8\x51\x48\xD3\x79\x60\x28\x81\xC6\x90\x5F\x63\xF3\x70\x23\xBD\xAF\x36\xDF\x06\x3C\x09\x69\x0E\xDE\xDD\xAA\xBD\x46\x6D\x2B\x30\x56\xA3\x36\xCD\xFA\x69\xAA\x10\x8D\xC0\x68\x84\x91\x0A\xD0\x17\x52\xD3\xE7\xEF\x0B\x63\x64\xD3\xCC\x5B\xA6\x06\xF1\x16\x73\x6D\x56\x80\x3B\x7E\xD0\x46\x7F\x7B\x25\xE4\xB8\x05\x60\x70\xD3\x8D\x5B\x21\x7A\x80\xF1\x88\x33\x3B\x1E\xB3\xAF\x27\x57\xF3\xAB\x00\x0D\xC0\x4D\x60\x39\xC2\x6C\x90\x2A\x70\x17\xD8\x9E\xB7\xEF\x75\x00\xBD\xD4\x7E\xCD\x54\x01\xCE\xE6\xED\xB3\x26\x78\x77\x9A\xC7\x21\xE6\x9F\x11\xF1\x9E\x6D\x4B\x02\x0C\xF8\x67\xBC\x02\x0C\xE4\xED\xA7\xA0\xE0\x7F\xE5\x2F\xC5\x5C\x14\xCA\x1A\xA4\xDE\x73\x00\x00\x00\x00\x49\x45\x4E\x44\xAE\x42\x60\x82",
+	star = "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A\x00\x00\x00\x0D\x49\x48\x44\x52\x00\x00\x00\x30\x00\x00\x00\x30\x08\x06\x00\x00\x00\x57\x02\xF9\x87\x00\x00\x00\x09\x70\x48\x59\x73\x00\x00\x02\x76\x00\x00\x02\x76\x01\xDA\x60\xE3\x4F\x00\x00\x00\x19\x74\x45\x58\x74\x53\x6F\x66\x74\x77\x61\x72\x65\x00\x77\x77\x77\x2E\x69\x6E\x6B\x73\x63\x61\x70\x65\x2E\x6F\x72\x67\x9B\xEE\x3C\x1A\x00\x00\x02\x71\x49\x44\x41\x54\x68\x81\xED\x98\xBF\x6B\x14\x41\x18\x86\xDF\x51\x21\xA8\x39\x0C\x51\x1B\x2F\x81\x14\x01\xB1\x10\xD4\x48\x54\x14\x0B\xCB\x70\x95\x62\x27\x8A\x8D\x60\x40\xB4\xB2\x14\x02\xA2\x88\x60\x27\x16\x22\x16\x36\x16\x82\xFA\x07\xA4\x10\xD3\x88\x60\x61\x21\x44\xAD\xE2\x8F\x88\xA2\x68\x73\x46\xA3\x3E\x16\xBB\xC2\x25\x37\xBB\x99\x99\xBB\xC9\x04\xD9\xA7\xB9\x83\xE5\x9B\x79\xDE\x9D\x9D\xD9\x99\x95\x2A\x2A\x2A\x2A\xFE\x3B\x80\xD5\xC0\x04\xF0\x09\xF8\x00\x1C\x4F\xED\xE4\x05\x70\x89\x85\xCC\x01\x7D\xA9\xBD\x9C\x00\x86\x80\x79\xDA\xB9\x9C\xDA\xCD\x09\xE0\x9A\x45\x1E\xE0\x0B\xD0\x9B\xDA\xAF\x14\xA0\x06\x7C\x2D\x08\x00\x30\x9E\xDA\xB1\x14\xE0\x5C\x89\x3C\xC0\x4B\x60\x55\x6A\x4F\x2B\xF9\xCA\xF3\x7A\x89\x00\x00\x8D\xD4\xAE\x56\x80\x23\x0E\xF2\x00\x93\xA9\x5D\xAD\x00\x53\x8E\x01\x00\x76\xA4\xF6\x5D\x00\x30\xE2\x21\x0F\x70\xBB\x5B\x7D\x9B\x00\xD9\xCD\x92\xB6\x48\x1A\x90\x54\xCF\xFF\x37\x24\x8D\x78\x34\xF3\x43\xD2\x41\x49\xD3\xC6\x98\x6F\xBE\x0E\xAD\x14\x06\x00\x36\x4A\x1A\x97\xB4\x4D\xD2\xA0\x32\xD1\xBA\xA4\x9E\x4E\x3A\xB4\xD0\x94\x34\x23\x69\x56\xD2\x5B\x49\xEF\x24\xBD\x97\xF4\x26\xFF\x7D\x6E\x8C\x99\xF3\x6A\x11\x18\x00\x66\x3C\x1F\x8B\x58\x7C\x06\xC6\x8A\x5C\x8B\xD6\xE4\xF3\xCA\xEE\xFA\x4A\xA0\x5F\xD2\x5D\xB2\x47\xB7\x8D\xA2\x00\xFD\xF1\x7C\x82\xA8\x49\x3A\x64\xBB\x50\x14\xE0\x59\x3C\x97\x60\xAC\x93\xDD\x3A\x89\x81\x75\x92\xA6\x24\xED\x8C\x69\xE4\xC1\x53\x49\xFB\x8D\x31\xF3\x8B\x2F\x58\x47\xC0\x18\xD3\x54\x36\x64\x8F\x23\x8B\xB9\xF0\x44\xD2\x98\x4D\x7E\x49\x80\x1E\xE0\x5E\xC2\x15\xE8\x01\xB0\xB6\xA3\xF8\x64\x9B\xB4\x9B\x09\xE4\x6F\x01\x6B\x3A\x92\x6F\x09\x61\x80\xAB\xCB\x28\x3F\xD1\x15\x71\x4B\x90\xB3\xC0\xEF\xC8\xF2\x17\xA2\xC8\xB7\x84\x38\x89\xFD\xCC\xDB\x29\xBF\x80\x33\x51\xE5\x5B\x42\x3C\x8C\x10\x20\xE8\xD0\x1F\x7A\xBC\xDB\x15\x58\x57\x46\x3D\xA4\xC8\x3B\x00\xF0\x6F\x2B\xDD\x6D\xF6\x86\x14\x85\x8C\xC0\xBE\x90\x8E\x1C\x18\x06\x36\xF9\x16\x85\x04\xD8\x13\x50\xE3\x82\x91\x34\xEA\x5B\xB4\x92\x02\x04\xB5\xED\x15\x80\xEC\xCD\xE8\x73\x74\xF4\xC5\x7B\x1E\xF8\x8E\xC0\x76\x49\xEB\x7D\x3B\xF1\x60\x14\xCF\x0F\x5F\xBE\x01\x7C\xEE\xD0\xA4\xB2\xE5\xF6\x84\xB2\xF3\xAE\x0B\x7D\x92\xB6\x7A\x3A\xB9\x03\xDC\x70\x78\x21\xBD\x60\xD1\x19\x16\xE8\x05\x2E\x02\x4D\x87\xFA\x63\x31\x03\x5C\x2F\xE9\xF8\x23\x70\x9A\x92\x1D\x24\x30\x08\xDC\x01\xFE\x94\xB4\x73\x2A\x66\x80\x03\xB4\x6F\xE6\xBE\x03\x57\x80\x0D\x1E\xED\xEC\x06\x1E\x59\xE4\x7F\x02\xC3\xD1\x02\xE4\x9D\x37\x80\x69\xB2\xCD\xD7\x7D\x60\xA8\x83\xB6\x0E\x03\xAF\x72\xF9\x59\xE0\x68\x17\x55\x97\x0F\xA0\x96\xDA\xA1\xA2\xA2\x22\x11\x7F\x01\x4A\x39\xBD\xF2\x1A\xCF\x69\xD0\x00\x00\x00\x00\x49\x45\x4E\x44\xAE\x42\x60\x82"
+}
