@@ -10,7 +10,7 @@ local encoding = require "encoding"
 encoding.default = "CP1251"
 u8 = encoding.UTF8
 
--- ==================== FFI PENTRU RADAR EDITOR ====================
+------------------------------------ FFI PENTRU RADAR EDITOR ------------------------------------
 local ffi = require "ffi"
 ffi.cdef[[
     void *malloc(size_t size);
@@ -18,21 +18,26 @@ ffi.cdef[[
 ]]
 local libc = ffi.load("msvcrt.dll")
 
-local ini = nil  -- Va fi incarcat mai tarziu
+local ini = nil  
 local radar_section = "RadarPosition"
 local radar_editor = {
-    x = 55.0,
-    y = 100.0,
-    h = 85.0,
-    w = 85.0
+    x = 39.0,
+    y = 117.0,
+    h = 100.0,
+    w = 100.0
 }
 local radar_ui = {
-    x = imgui.new.float(55.0),
-    y = imgui.new.float(100.0),
-    h = imgui.new.float(85.0),
-    w = imgui.new.float(85.0)
+    x = imgui.new.float(39.0),
+    y = imgui.new.float(117.0),
+    h = imgui.new.float(100.0),
+    w = imgui.new.float(100.0)
 }
 local rpx, rpy, rph, rpw = nil, nil, nil, nil
+local weapons = {}
+local icons = {}
+local font_hud, font_min, font_money, font_set
+local u32
+local process_position
 
 local function radar_clamp(v, minv, maxv)
     if v < minv then return minv end
@@ -42,11 +47,83 @@ end
 
 local function radar_defaultConfig()
     return {
-        x = 55.0,
-        y = 100.0,
-        h = 85.0,
-        w = 85.0
+        x = 39.0,
+        y = 117.0,
+        h = 100.0,
+        w = 100.0
     }
+end
+
+local function clampInt(v, minv, maxv)
+    local n = tonumber(v) or minv
+    if n < minv then return minv end
+    if n > maxv then return maxv end
+    return math.floor(n)
+end
+
+local function ensureTable(t, defaults)
+    if type(t) ~= "table" then t = {} end
+    for k, v in pairs(defaults) do
+        if t[k] == nil then t[k] = v end
+    end
+    return t
+end
+
+local function ensureColorArray(value, default)
+    if type(value) ~= "table" or #value < 3 then
+        return { default[1], default[2], default[3] }
+    end
+    return {
+        tonumber(value[1]) or default[1],
+        tonumber(value[2]) or default[2],
+        tonumber(value[3]) or default[3]
+    }
+end
+
+local function normalizeConfig()
+    ini.main = ensureTable(ini.main, {
+        x = select(1, getScreenResolution()) - 130,
+        y = 110,
+        satiety = false,
+        se_timer = 300,
+        orig_hud = false,
+        values = false,
+        size = 2,
+        max_hp = 100,
+        show_indicator3 = true,
+        theme = 0,
+    })
+
+    ini.position = ensureTable(ini.position, {
+        hp_x = 0,
+        hp_y = 0,
+        armor_x = 0,
+        armor_y = 0,
+        satiety_x = 0,
+        satiety_y = 0,
+        money_x = 0,
+        money_y = 0,
+        ammo_x = 0,
+        ammo_y = 0,
+    })
+
+    ini.RadarPosition = ensureTable(ini.RadarPosition, {
+        x = 39.0,
+        y = 117.0,
+        h = 100.0,
+        w = 100.0,
+    })
+
+    ini.color_hp = ensureColorArray(ini.color_hp, { 0.53, 0.81, 0.97 })
+    ini.color_ap = ensureColorArray(ini.color_ap, { 0.90, 0.90, 0.90 })
+    ini.color_se = ensureColorArray(ini.color_se, { 1.00, 0.75, 0.35 })
+    ini.color_be = ensureColorArray(ini.color_be, { 0.00, 0.70, 1.00 })
+    ini.color_money = ensureColorArray(ini.color_money, { 1.00, 1.00, 1.00 })
+
+    ini.main.size = clampInt(ini.main.size, 1, 3)
+    ini.main.theme = tonumber(ini.main.theme) or 0
+    ini.main.max_hp = clampInt(ini.main.max_hp, 50, 100)
+    ini.main.se_timer = tonumber(ini.main.se_timer) or 300
 end
 
 local function saveRadarConfig()
@@ -76,6 +153,10 @@ local function loadRadarConfig()
         return
     end
     radar_editor = radar_defaultConfig()
+    radar_ui.x[0] = radar_editor.x
+    radar_ui.y[0] = radar_editor.y
+    radar_ui.h[0] = radar_editor.h
+    radar_ui.w[0] = radar_editor.w
 end
 
 local function radar_freeOne(p)
@@ -186,10 +267,10 @@ ini = inicfg.load({
 		ammo_y = 0,
 	},
 	RadarPosition = {
-		x = 55.0,
-		y = 100.0,
-		h = 85.0,
-		w = 85.0,
+		x = 39.0,
+		y = 117.0,
+		h = 100.0,
+		w = 100.0,
 	},
 	color_hp = { 0.53, 0.81, 0.97 },
 	color_ap = { 0.90, 0.90, 0.90 },
@@ -205,6 +286,8 @@ ini = inicfg.load({
 		window_bg = { 0.14, 0.14, 0.14 },
 	}
 }, "HassleHUD.ini")
+
+normalizeConfig()
 
 -- Incarca setarile radarului din INI
 loadRadarConfig()
@@ -222,7 +305,7 @@ local show_theme_menu = imgui.new.bool(false)
 local hud_visibility_state = imgui.new.int(0)
 local f7_key_pressed = false
 
--- ==================== TEME PREDEFINITE ====================
+------------------------------------ TEME PREDEFINITE ------------------------------------
 local themes = {
 	[0] = {
 		name = "Electric Blue",
@@ -324,6 +407,9 @@ local themes = {
 	},
 }
 
+ini.main.theme = clampInt(ini.main.theme, 0, #themes - 1)
+current_theme[0] = ini.main.theme
+
 local pos_hp_x = imgui.new.float(ini.position.hp_x)
 local pos_hp_y = imgui.new.float(ini.position.hp_y)
 local pos_armor_x = imgui.new.float(ini.position.armor_x)
@@ -378,22 +464,38 @@ imgui.OnInitialize(function()
 		icons[name] = imgui.CreateTextureFromFileInMemory(imgui.new('const char*', data), #data)
 	end
 
-	if doesFileExist(font_path[1]) then
-		local Fonts = imgui.GetIO().Fonts
-		local builder = imgui.ImFontGlyphRangesBuilder()
-	    builder:AddRanges(Fonts:GetGlyphRangesCyrillic())
-	    builder:AddText("Unineueheavy-italic")
-	    local range = imgui.ImVector_ImWchar()
-	    builder:BuildRanges(range)
+	local Fonts = imgui.GetIO().Fonts
+	local builder = imgui.ImFontGlyphRangesBuilder()
+	builder:AddRanges(Fonts:GetGlyphRangesCyrillic())
+	builder:AddText("Unineueheavy-italic")
+	local range = imgui.ImVector_ImWchar()
+	builder:BuildRanges(range)
 
-		Fonts:Clear()
+	Fonts:Clear()
+	if doesFileExist(font_path[1]) then
 		font_hud = Fonts:AddFontFromFileTTF(font_path[1], ({ 20, 25, 30 })[ini.main.size], nil, range[0].Data)
 		font_min = Fonts:AddFontFromFileTTF(font_path[1], ({ 10, 15, 20 })[ini.main.size], nil, range[0].Data)
 		font_money = Fonts:AddFontFromFileTTF(font_path[1], 35, nil, range[0].Data)
-		font_set = Fonts:AddFontFromFileTTF(font_path[2], 15, nil, range[0].Data)
 	else
 		print("{FF3030}Fontul 'Unineueheavy' nu a fost gasit! Se va folosi fontul implicit")
 	end
+
+	if doesFileExist(font_path[2]) then
+		font_set = Fonts:AddFontFromFileTTF(font_path[2], 15, nil, range[0].Data)
+	else
+		font_set = nil
+		print("{FF3030}Fontul 'Trebuchet' nu a fost gasit! Se va folosi fontul implicit")
+	end
+
+	if not font_hud then
+		font_hud = Fonts:AddFontDefault()
+		font_min = font_hud
+		font_money = font_hud
+	end
+
+	font_min = font_min or font_hud
+	font_money = font_money or font_hud
+	font_set = font_set or font_hud
 
 	u32 = imgui.ColorConvertFloat4ToU32
 	imgui.GetIO().IniFilename = nil
@@ -437,17 +539,17 @@ end)
 function main()
 	while not isSampAvailable() do wait(0) end
 	if orig_hud[0] == false then displayHud(false) end
-
+	sampAddChatMessage("{eb4034}HassleHUD {FFFFFF}made by {eb4034}allecsei {FFFFFF}| Comanda: {eb4034}/hassle", 0xFFFFFF)
+	sampAddChatMessage("{eb4034}HassleHUD {FFFFFF}F7 toggle: Normal -> Transparent -> Hidden -> Normal", 0xFFFFFF)
+	
 	-- Incarcam config radar
 	loadRadarConfig()
+	while not sampIsLocalPlayerSpawned() do wait(0) end
 	radar_applyAll()
 
 	sampRegisterChatCommand("hassle", function()
 		settings[0] = not settings[0]
 	end)
-
-	sampAddChatMessage("{eb4034}HassleHUD {FFFFFF}made by {eb4034}allecsei {FFFFFF}| Comanda: {eb4034}/hassle", 0xFFFFFF)
-	sampAddChatMessage("{eb4034}HassleHUD {FFFFFF}F7 toggle: Normal -> Transparent -> Hidden -> Normal", 0xFFFFFF)
 
 	while true do
 		wait(0)
@@ -932,7 +1034,7 @@ local settings_frame = imgui.OnFrame(
 						ammo_x = 0, ammo_y = 0
 					}
 					inicfg.save(ini, "HassleHUD.ini")
-					sampAddChatMessage("{eb4034}Pozitiile au fost resetate!", -1)
+					sampAddChatMessage("{eb4034}HassleHUD {FFFFFF}Pozitiile au fost resetate!", -1)
 				end
 				imgui.PopStyleColor()
 				imgui.PopStyleColor()
@@ -1007,8 +1109,8 @@ local settings_frame = imgui.OnFrame(
 				imgui.SetCursorPosY(imgui.GetCursorPosY() + 5)
 
 				if not sampIsLocalPlayerSpawned() then
-					imgui.SetCursorPosX((W - 30 - imgui.CalcTextSize(u8("Radarul functioneaza dupa spawn!")).x) / 2)
-					imgui.TextColored(imgui.ImVec4(0.8, 0.6, 0.2, 1), u8("Radarul functioneaza dupa spawn!"))
+					imgui.SetCursorPosX((W - 30 - imgui.CalcTextSize(u8("{eb4034}HassleHUD {FFFFFF}Radarul functioneaza dupa spawn!")).x) / 2)
+					imgui.TextColored(imgui.ImVec4(0.8, 0.6, 0.2, 1), u8("{eb4034}HassleHUD {FFFFFF}Radarul functioneaza dupa spawn!"))
 				end
 
 				imgui.SetCursorPosY(imgui.GetCursorPosY() + 5)
@@ -1120,7 +1222,7 @@ local settings_frame = imgui.OnFrame(
 				imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.9, 0.5, 0.2, 1))
 				if imgui.Button(u8(" Reseteaza Radar "), imgui.ImVec2(220, 30)) then
 					radar_resetDefaults()
-					sampAddChatMessage("{eb4034}Radarul a fost resetat!", -1)
+					sampAddChatMessage("{eb4034}HassleHUD {FFFFFF}Radarul a fost resetat!", -1)
 				end
 				imgui.PopStyleColor()
 				imgui.PopStyleColor()
@@ -1376,37 +1478,53 @@ local theme_popup_frame = imgui.OnFrame(
 )
 
 function getPlayerWanted()
-	return memory.getuint8(0x58DB60)
+    return memory.getuint8(0x58DB60) or 0
 end
 
 function getReserveOfBreath()
-    local float = memory.getfloat(0xB7CDE0)
+    local float = memory.getfloat(0xB7CDE0) or 0.0
     return float / 39.97000244
 end
 
 function getReserveOfStamina()
-    local float = memory.getfloat(0xB7CDB4)
+    local float = memory.getfloat(0xB7CDB4) or 0.0
     return float / 31.47000244
 end
 
 function getAmmoInClip()
-	local pointer = getCharPointer(PLAYER_PED)
-	local weapon = getCurrentCharWeapon(PLAYER_PED)
-	local slot = getWeapontypeSlot(weapon)
-	local offset = pointer + 0x5A0
-	local address = offset + slot * 0x1C
-	return memory.getuint32(address + 0x8)
+    local pointer = getCharPointer(PLAYER_PED)
+    if not pointer or pointer == 0 then
+        return 0
+    end
+
+    local weapon = getCurrentCharWeapon(PLAYER_PED)
+    if not weapon or weapon == 0 then
+        return 0
+    end
+
+    local slot = getWeapontypeSlot(weapon)
+    if not slot then
+        return 0
+    end
+
+    local offset = pointer + 0x5A0
+    local address = offset + slot * 0x1C
+    return memory.getuint32(address + 0x8)
 end
 
-function int_separator(int)
-	int = tostring(int)
-	if int ~= nil and string.len(int) > 3 then
-		local b, e = ("%d"):format(int):gsub("^%-", "")
-		local c = b:reverse():gsub("%d%d%d", "%1.")
-		local d = c:reverse():gsub("^%.", "")
-		return int:gsub(int, (e == 1 and "-" or "") .. d)
-	end
-	return int
+function int_separator(value)
+    local str = tostring(value or 0)
+    local sign = ""
+    if str:sub(1, 1) == "-" then
+        sign = "-"
+        str = str:sub(2)
+    end
+
+    local formatted = str:reverse():gsub("(%d%d%d)", "%1."):reverse()
+    if formatted:sub(1, 1) == "." then
+        formatted = formatted:sub(2)
+    end
+    return sign .. formatted
 end
 
 function bringFloatTo(from, to, start_time, duration)
