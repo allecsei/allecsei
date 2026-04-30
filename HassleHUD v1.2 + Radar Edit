@@ -38,6 +38,7 @@ local icons = {}
 local font_hud, font_min, font_money, font_set
 local u32
 local process_position
+local radar_spawned = false
 
 local function radar_clamp(v, minv, maxv)
     if v < minv then return minv end
@@ -545,6 +546,7 @@ function main()
 	-- Incarcam config radar
 	loadRadarConfig()
 	while not sampIsLocalPlayerSpawned() do wait(0) end
+	radar_spawned = true
 	radar_applyAll()
 
 	sampRegisterChatCommand("hassle", function()
@@ -553,6 +555,13 @@ function main()
 
 	while true do
 		wait(0)
+
+		if not radar_spawned and sampIsLocalPlayerSpawned() then
+			radar_spawned = true
+			radar_applyAll()
+		elseif radar_spawned and not sampIsLocalPlayerSpawned() then
+			radar_spawned = false
+		end
 
 		-- F7 key handling for HUD visibility toggle
 		-- State 0 = normal, 1 = semi-transparent, 2 = hidden
@@ -1115,8 +1124,10 @@ local settings_frame = imgui.OnFrame(
 
 				imgui.SetCursorPosY(imgui.GetCursorPosY() + 5)
 
-				-- Radar X
-				imgui.SetCursorPosX(20)
+				if sampIsLocalPlayerSpawned() then
+
+					-- Radar X
+					imgui.SetCursorPosX(20)
 				imgui.Text(u8("Radar X"))
 				imgui.SetNextItemWidth(150)
 				if imgui.DragFloat("##RadarX", radar_ui.x, 0.20, 0, 1920, "%.1f") then
@@ -1214,8 +1225,9 @@ local settings_frame = imgui.OnFrame(
 					radar_applyW(radar_editor.w)
 					saveRadarConfig()
 				end
+			end
 
-				-- Reset Radar Button
+			-- Reset Radar Button
 				imgui.SetCursorPosY(imgui.GetCursorPosY() + 10)
 				imgui.SetCursorPosX((W - 30 - 220) / 2)
 				imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.9, 0.5, 0.2, 0.8))
